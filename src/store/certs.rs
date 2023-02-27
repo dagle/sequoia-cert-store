@@ -112,7 +112,7 @@ impl<'a> Store<'a> for Certs<'a>
                     })?
                     .iter()
                     .filter_map(|fpr| self.certs.get(fpr))
-                    // Check the constaints before we convert the
+                    // Check the constraints before we convert the
                     // rawcert to a cert.
                     .filter(|cert| cert.key_handle().aliases(kh))
                     .map(|cert| Cow::Borrowed(cert))
@@ -149,7 +149,7 @@ impl<'a> Store<'a> for Certs<'a>
             })?
             .iter()
             .filter_map(|fpr| self.certs.get(fpr))
-            // Check the constaints before we convert the rawcert to a
+            // Check the constraints before we convert the rawcert to a
             // cert.
             .filter(|cert| {
                 cert.keys().any(|k| k.key_handle().aliases(kh))

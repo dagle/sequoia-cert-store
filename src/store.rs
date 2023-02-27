@@ -284,7 +284,7 @@ pub trait Store<'a> {
     fn by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>>;
 
     /// Returns certificates that have a User ID matching the
-    /// specified patter according to the query parameters.
+    /// specified pattern according to the query parameters.
     fn select_userid(&self, query: &UserIDQueryParams, pattern: &str)
         -> Result<Vec<Cow<LazyCert<'a>>>>;
 

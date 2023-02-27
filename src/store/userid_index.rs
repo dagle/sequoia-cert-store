@@ -159,7 +159,7 @@ impl UserIDIndex {
                        pattern, userid, anchor_start, anchor_end,
                        ignore_case);
 
-                    // XXX: Consier using
+                    // XXX: Consider using
                     // https://crates.io/crates/memchr instead.
                     if match (*anchor_start, *anchor_end) {
                         (true, true) => userid == pattern,

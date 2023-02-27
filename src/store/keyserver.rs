@@ -280,7 +280,7 @@ impl<'a> Store<'a> for KeyServer<'a> {
         certs.iter().cloned().for_each(|cert| self.cache(cert));
 
         // Only keep the certificates that actually satisfy the
-        // contraints.
+        // constraints.
         certs.retain(|cert| {
             query.check_cert(cert.borrow(), pattern)
         });
