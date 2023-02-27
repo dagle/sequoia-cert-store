@@ -382,7 +382,7 @@ impl<'a> Store<'a> for CertD<'a> {
     fn select_userid(&self, params: &UserIDQueryParams, pattern: &str)
         -> Result<Vec<Cow<LazyCert<'a>>>>
     {
-        tracer!(true, "CertD::select_userid");
+        tracer!(TRACE, "CertD::select_userid");
         t!("params: {:?}, pattern: {:?}", params, pattern);
 
         let matches = self.userid_index.select_userid(params, pattern)?;
