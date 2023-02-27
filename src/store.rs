@@ -230,11 +230,64 @@ impl UserIDQueryParams {
     pub fn check_valid_cert(&self, vc: &ValidCert, pattern: &str) -> bool {
         vc.userids().any(|ua| self.check(ua.userid(), pattern))
     }
+
+    /// Returns whether the supplied email address is actually a valid
+    /// email address.
+    ///
+    /// If it is valid, returns the normalized email address.
+    pub fn is_email(email: &str) -> Result<String> {
+        let email_check = UserID::from(format!("<{}>", email));
+        match email_check.email() {
+            Ok(Some(email_check)) => {
+                if email != email_check {
+                    return Err(StoreError::InvalidEmail(
+                        email.to_string(), None).into());
+                }
+            }
+            Ok(None) => {
+                return Err(StoreError::InvalidEmail(
+                    email.to_string(), None).into());
+            }
+            Err(err) => {
+                return Err(StoreError::InvalidEmail(
+                    email.to_string(), Some(err)).into());
+            }
+        }
+
+        match UserID::from(&email[..]).email_normalized() {
+            Err(err) => {
+                Err(StoreError::InvalidEmail(
+                    email.to_string(), Some(err)).into())
+            }
+            Ok(None) => {
+                Err(StoreError::InvalidEmail(
+                    email.to_string(), None).into())
+            }
+            Ok(Some(email)) => {
+                Ok(email)
+            }
+        }
+    }
+
+    /// Returns whether the supplied domain address is actually a
+    /// valid domain for an email address.
+    ///
+    /// Returns the normalized domain.
+    pub fn is_domain(domain: &str) -> Result<String> {
+        let localpart = "user@";
+        let email = format!("{}{}", localpart, domain);
+        let email = Self::is_email(&email)?;
+
+        // We get the normalized email address back.  Chop off the
+        // username and the @.
+        assert!(email.starts_with(localpart));
+        Ok(email[localpart.len()..].to_string())
+    }
 }
 
 /// [`Store`] specific error codes.
 #[non_exhaustive]
-#[derive(thiserror::Error, Debug, Clone, PartialEq)]
+#[derive(thiserror::Error, Debug)]
 pub enum StoreError {
     /// No certificate was found.
     #[error("{0} was not found")]
@@ -243,6 +296,10 @@ pub enum StoreError {
     /// No certificate matches the search criteria.
     #[error("No certificates matched {0}")]
     NoMatches(String),
+
+    /// The email address does not appear to be a valid email address.
+    #[error("{0:?} does not appear to be a valid email address")]
+    InvalidEmail(String, #[source] Option<anyhow::Error>),
 }
 
 /// Returns certificates from a backing store.
@@ -722,5 +779,42 @@ mod tests {
         assert_eq!(foo.count(), 0);
 
         Ok(())
+    }
+
+    #[test]
+    fn is_email() {
+        assert!(UserIDQueryParams::is_email("foo@domain.com").is_ok());
+
+        // Need a local part.
+        assert!(UserIDQueryParams::is_email("@domain.com").is_err());
+        // Need a domain.
+        assert!(UserIDQueryParams::is_email("foo@").is_err());
+
+        // One @
+        assert!(UserIDQueryParams::is_email("foo").is_err());
+        assert!(UserIDQueryParams::is_email("foo@@domain.com").is_err());
+        assert!(UserIDQueryParams::is_email("foo@a@domain.com").is_err());
+
+        // Bare email address, not wrapped in angle brackets.
+        assert!(UserIDQueryParams::is_email("<foo@domain.com>").is_err());
+
+        // Whitespace is not allowed.
+        assert!(UserIDQueryParams::is_email(" foo@domain.com").is_err());
+        assert!(UserIDQueryParams::is_email("foo o@domain.com").is_err());
+        assert!(UserIDQueryParams::is_email("foo@do main.com").is_err());
+        assert!(UserIDQueryParams::is_email("foo@domain.com ").is_err());
+    }
+
+    #[test]
+    fn is_domain() {
+        assert!(UserIDQueryParams::is_domain("domain.com").is_ok());
+
+        // No at.
+        assert!(UserIDQueryParams::is_domain("foo").is_ok());
+        assert!(UserIDQueryParams::is_domain("@domain.com").is_err());
+        assert!(UserIDQueryParams::is_domain("foo@").is_err());
+        assert!(UserIDQueryParams::is_domain("foo@@domain.com").is_err());
+        assert!(UserIDQueryParams::is_domain("foo@a@domain.com").is_err());
+        assert!(UserIDQueryParams::is_domain("<foo@domain.com>").is_err());
     }
 }

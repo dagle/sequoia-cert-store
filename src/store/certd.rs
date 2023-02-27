@@ -516,8 +516,13 @@ mod tests {
             match certd.by_cert(&kh) {
                 Ok(certs) => panic!("Expected nothing, got {} certs", certs.len()),
                 Err(err) => {
-                    assert_eq!(err.downcast_ref::<StoreError>(),
-                               Some(&StoreError::NotFound(KeyHandle::from(kh))))
+                    if let Some(&StoreError::NotFound(ref got))
+                        = err.downcast_ref::<StoreError>()
+                    {
+                        assert_eq!(&kh, got);
+                    } else {
+                        panic!("Expected NotFound, got: {}", err);
+                    }
                 }
             }
         }
