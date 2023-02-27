@@ -7,7 +7,6 @@ use openpgp::KeyHandle;
 use openpgp::Result;
 use openpgp::cert::Cert;
 use openpgp::cert::ValidCert;
-use openpgp::cert::raw::RawCert;
 use openpgp::packet::UserID;
 
 mod userid_index;
@@ -655,49 +654,26 @@ where T: Store<'a> + ?Sized
 }
 /// Provides an interface to update a backing store.
 pub trait StoreUpdate<'a>: Store<'a> {
-    // Insert a certificate.
-    fn insert_cert(&mut self, cert: Cert) -> Result<()> {
-        self.insert_lazy_cert(cert.into())
-    }
-
-    // Insert a certificate.
-    fn insert_raw_cert(&mut self, cert: RawCert<'a>) -> Result<()> {
-        self.insert_lazy_cert(cert.into())
-    }
-
-    // Insert a certificate.
-    fn insert_lazy_cert(&mut self, cert: LazyCert<'a>) -> Result<()>;
+    /// Insert a certificate.
+    ///
+    /// This uses `Cert::merge_from_public` to merge the certificate
+    /// with any existing certificate.
+    fn update(&mut self, cert: LazyCert<'a>) -> Result<()>;
 }
 
 impl<'a: 't, 't, T> StoreUpdate<'a> for Box<T>
 where T: StoreUpdate<'a> + ?Sized + 't
 {
-    fn insert_cert(&mut self, cert: Cert) -> Result<()> {
-        self.as_mut().insert_cert(cert)
-    }
-
-    fn insert_raw_cert(&mut self, cert: RawCert<'a>) -> Result<()> {
-        self.as_mut().insert_raw_cert(cert)
-    }
-
-    fn insert_lazy_cert(&mut self, cert: LazyCert<'a>) -> Result<()> {
-        self.as_mut().insert_lazy_cert(cert)
+    fn update(&mut self, cert: LazyCert<'a>) -> Result<()> {
+        self.as_mut().update(cert)
     }
 }
 
 impl<'a: 't, 't, T> StoreUpdate<'a> for &'t mut T
 where T: StoreUpdate<'a> + ?Sized
 {
-    fn insert_cert(&mut self, cert: Cert) -> Result<()> {
-        (*self).insert_cert(cert)
-    }
-
-    fn insert_raw_cert(&mut self, cert: RawCert<'a>) -> Result<()> {
-        (*self).insert_raw_cert(cert)
-    }
-
-    fn insert_lazy_cert(&mut self, cert: LazyCert<'a>) -> Result<()> {
-        (*self).insert_lazy_cert(cert)
+    fn update(&mut self, cert: LazyCert<'a>) -> Result<()> {
+        (*self).update(cert)
     }
 }
 

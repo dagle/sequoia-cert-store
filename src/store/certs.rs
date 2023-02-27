@@ -95,7 +95,7 @@ impl<'a> Certs<'a>
 
         let mut r = Self::empty();
         for cert in certs {
-            r.insert_lazy_cert(cert).expect("implementation doesn't fail")
+            r.update(cert).expect("implementation doesn't fail")
         }
 
         Ok(r)
@@ -286,7 +286,7 @@ impl<'a> Store<'a> for Certs<'a>
 }
 
 impl<'a> StoreUpdate<'a> for Certs<'a> {
-    fn insert_lazy_cert(&mut self, cert: LazyCert<'a>) -> Result<()> {
+    fn update(&mut self, cert: LazyCert<'a>) -> Result<()> {
         let fpr = cert.fingerprint();
 
         // Populate the key map.
