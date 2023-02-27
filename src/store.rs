@@ -240,6 +240,7 @@ pub enum StoreError {
     #[error("{0} was not found")]
     NotFound(KeyHandle),
 
+    /// No certificate matches the search criteria.
     #[error("No certificates matched {0}")]
     NoMatches(String),
 }
