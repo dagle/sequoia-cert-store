@@ -225,7 +225,7 @@ impl<'a> CertD<'a> {
         };
 
         let result: Vec<(openpgp_cert_d::Tag, LazyCert)> = if lazy {
-            items.into_iter()
+            items.collect::<Vec<_>>().into_par_iter()
                 .filter_map(|fp| {
                     // XXX: Once we have a cached tag, avoid the
                     // work if tags match.
