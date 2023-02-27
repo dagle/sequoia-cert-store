@@ -74,6 +74,13 @@ impl<'a> Certs<'a>
     }
 
     /// Returns a new `Certs`.
+    pub fn from_cert_refs(certs: impl Iterator<Item=&'a Cert>)
+        -> Result<Self>
+    {
+        Self::from_lazy_certs(certs.map(LazyCert::from_cert_ref))
+    }
+
+    /// Returns a new `Certs`.
     pub fn from_raw_certs(raw_certs: impl Iterator<Item=RawCert<'a>>)
         -> Result<Self>
     {
