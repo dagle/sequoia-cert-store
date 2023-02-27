@@ -29,21 +29,6 @@ use crate::store::UserIDQueryParams;
 
 use crate::TRACE;
 
-/// Like CertD::iter, but returns open `File`s.
-///
-/// XXX: Use the upstream version once available.
-fn lazy_iter<'c>(c: &'c openpgp_cert_d::CertD, base: &'c Path)
-                 -> Result<impl Iterator<Item = (String,
-                                                 openpgp_cert_d::Tag,
-                                                 fs::File)> + 'c> {
-    Ok(c.iter_fingerprints()?.filter_map(move |fp| {
-        let path = base.join(&fp[..2]).join(&fp[2..]);
-        let f = fs::File::open(path).ok()?;
-        let tag = f.metadata().ok()?.try_into().ok()?;
-        Some((fp, tag, f))
-    }))
-}
-
 pub struct CertD<'a> {
     certd: cert_d::CertD,
     path: PathBuf,
@@ -207,54 +192,84 @@ impl<'a> CertD<'a> {
     // index.
     fn initialize(&mut self, lazy: bool) -> Result<()>
     {
+        use rayon::prelude::*;
+
         tracer!(TRACE, "CertD::initialize");
 
-        let items = lazy_iter(&self.certd, &self.path)
-            .into_iter().flatten() // Folds errors.
-            .collect::<Vec<_>>();
+        let items = self.certd.iter_fingerprints()?;
+
+        let open = |fp: String| -> Option<(String, _, _)> {
+            let path = self.path.join(&fp[..2]).join(&fp[2..]);
+
+            let f = match fs::File::open(&path) {
+                Ok(f) => f,
+                Err(err) => {
+                    t!("Reading {:?}: {}", path, err);
+                    return None;
+                }
+            };
+            let metadata = match f.metadata() {
+                Ok(f) => f,
+                Err(err) => {
+                    t!("Stating entry {:?}: {}", path, err);
+                    return None;
+                }
+            };
+            match openpgp_cert_d::Tag::try_from(metadata) {
+                Ok(tag) => Some((fp, tag, f)),
+                Err(err) => {
+                    t!("Getting tag for entry {:?}: {}", path, err);
+                    None
+                }
+            }
+        };
 
         let result: Vec<(openpgp_cert_d::Tag, LazyCert)> = if lazy {
-            items.into_iter().filter_map(|(fp, tag, file)| {
-                // XXX: Once we have a cached tag, avoid the
-                // work if tags match.
-                t!("loading {} from overlay", fp);
+            items.into_iter()
+                .filter_map(|fp| {
+                    // XXX: Once we have a cached tag, avoid the
+                    // work if tags match.
+                    t!("loading {} from overlay", fp);
 
-                let mut parser = match RawCertParser::from_reader(file) {
-                    Ok(parser) => parser,
-                    Err(err) => {
-                        let err = anyhow::Error::from(err).context(format!(
-                            "While reading {:?} from the certd {:?}",
-                            fp, self.path));
-                        print_error_chain(&err);
-                        return None;
-                    }
-                };
+                    let (fp, tag, file) = open(fp)?;
 
-                match parser.next() {
-                    Some(Ok(cert)) => Some((tag, LazyCert::from(cert))),
-                    Some(Err(err)) => {
-                        let err = anyhow::Error::from(err).context(format!(
-                            "While parsing {:?} from the certd {:?}",
-                            fp, self.path));
-                        print_error_chain(&err);
-                        None
+                    let mut parser = match RawCertParser::from_reader(file) {
+                        Ok(parser) => parser,
+                        Err(err) => {
+                            let err = anyhow::Error::from(err).context(format!(
+                                "While reading {:?} from the certd {:?}",
+                                fp, self.path));
+                            print_error_chain(&err);
+                            return None;
+                        }
+                    };
+
+                    match parser.next() {
+                        Some(Ok(cert)) => Some((tag, LazyCert::from(cert))),
+                        Some(Err(err)) => {
+                            let err = anyhow::Error::from(err).context(format!(
+                                "While parsing {:?} from the certd {:?}",
+                                fp, self.path));
+                            print_error_chain(&err);
+                            None
+                        }
+                        None => {
+                            let err = anyhow::anyhow!(format!(
+                                "While parsing {:?} from the certd {:?}: empty file",
+                                fp, self.path));
+                            print_error_chain(&err);
+                            None
+                        }
                     }
-                    None => {
-                        let err = anyhow::anyhow!(format!(
-                            "While parsing {:?} from the certd {:?}: empty file",
-                            fp, self.path));
-                        print_error_chain(&err);
-                        None
-                    }
-                }
-            }).collect()
+                })
+                .collect()
         } else {
-            use rayon::prelude::*;
-
             // For performance reasons, we read, parse, and
             // canonicalize certs in parallel.
-            items.into_par_iter()
-                .filter_map(|(fp, tag, file)| {
+            items.collect::<Vec<_>>().into_par_iter()
+                .filter_map(|fp| {
+                    let (fp, tag, file) = open(fp)?;
+
                     // XXX: Once we have a cached tag and
                     // presumably a Sync index, avoid the work if
                     // tags match.
@@ -397,6 +412,143 @@ impl<'a> StoreUpdate<'a> for CertD<'a> {
                 Ok(new)
             }
         })?;
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use anyhow::Context;
+
+    use openpgp::packet::UserID;
+    use openpgp::serialize::Serialize;
+
+    // Make sure that we can read a huge cert-d.  Specifically, the
+    // typical file descriptor limit is 1024.  Make sure we can
+    // initialize and iterate over a cert-d with a few more entries
+    // than that.
+    #[test]
+    fn huge_cert_d() -> Result<()> {
+        let path = tempfile::tempdir()?;
+        let certd = cert_d::CertD::with_base_dir(&path)
+            .map_err(|err| {
+                let err = anyhow::Error::from(err)
+                    .context(format!("While opening the certd {:?}", path));
+                print_error_chain(&err);
+                err
+            })?;
+
+        // Generate some certificates and write them to a cert-d using
+        // the low-level interface.
+        const N: usize = 1050;
+
+        let mut certs = Vec::new();
+        let mut certs_fpr = Vec::new();
+        let mut subkeys_fpr = Vec::new();
+        let mut userids = Vec::new();
+
+        for i in 0..N {
+            let userid = format!("<{}@example.org>", i);
+
+            let (cert, _rev) = CertBuilder::new()
+                .set_cipher_suite(CipherSuite::Cv25519)
+                .add_userid(UserID::from(&userid[..]))
+                .add_storage_encryption_subkey()
+                .generate()
+                .expect("ok");
+
+            certs_fpr.push(cert.fingerprint());
+            subkeys_fpr.extend(cert.keys().subkeys().map(|ka| ka.fingerprint()));
+            userids.push(userid);
+
+            let mut bytes = Vec::new();
+            cert.serialize(&mut bytes).expect("can serialize to a vec");
+            certd
+                .insert(bytes.into_boxed_slice(), |new, disk| {
+                    assert!(disk.is_none());
+
+                    Ok(new)
+                })
+                .with_context(|| {
+                    format!("{:?} ({})", path, cert.fingerprint())
+                })
+                .expect("can insert");
+
+            certs.push(cert);
+        }
+
+        // One subkey per certificate.
+        assert_eq!(certs_fpr.len(), subkeys_fpr.len());
+
+        certs_fpr.sort();
+
+        // Open the cert-d and make sure we can read what we wrote via
+        // the low-level interface.
+        let certd = CertD::open(&path).expect("exists");
+
+        // Test Store::iter.  In particular, make sure we get
+        // everything back.
+        let mut certs_read = certd.iter().collect::<Vec<_>>();
+        assert_eq!(
+            certs_read.len(), certs.len(),
+            "Looks like you're exhausting the available file descriptors");
+
+        certs_read.sort_by_key(|c| c.fingerprint());
+        let certs_read_fpr
+            = certs_read.iter().map(|c| c.fingerprint()).collect::<Vec<_>>();
+        assert_eq!(certs_fpr, certs_read_fpr);
+
+        // Test Store::by_cert.
+        for cert in certs.iter() {
+            let certs_read = certd.by_cert(&cert.key_handle()).expect("present");
+            // We expect exactly one cert.
+            assert_eq!(certs_read.len(), 1);
+            let cert_read = certs_read.into_iter().next().expect("have one")
+                .as_cert().expect("valid");
+            assert_eq!(&cert_read, cert);
+        }
+
+        for subkey in subkeys_fpr.iter() {
+            let kh = KeyHandle::from(subkey.clone());
+            match certd.by_cert(&kh) {
+                Ok(certs) => panic!("Expected nothing, got {} certs", certs.len()),
+                Err(err) => {
+                    assert_eq!(err.downcast_ref::<StoreError>(),
+                               Some(&StoreError::NotFound(KeyHandle::from(kh))))
+                }
+            }
+        }
+
+        // Test Store::by_key.
+        for fpr in certs.iter().map(|cert| cert.fingerprint())
+            .chain(subkeys_fpr.iter().cloned())
+        {
+            let certs_read
+                = certd.by_key(&KeyHandle::from(fpr.clone())).expect("present");
+            // We expect exactly one cert.
+            assert_eq!(certs_read.len(), 1);
+            let cert_read = certs_read.into_iter().next().expect("have one")
+                .as_cert().expect("valid");
+
+            assert!(cert_read.keys().any(|k| k.fingerprint() == fpr));
+        }
+
+        // Test Store::by_userid.
+        for userid in userids.iter() {
+            let userid = UserID::from(&userid[..]);
+
+            let certs_read
+                = certd.by_userid(&userid).expect("present");
+            // We expect exactly one cert.
+            assert_eq!(certs_read.len(), 1);
+            let cert_read = certs_read.into_iter().next().expect("have one")
+                .as_cert().expect("valid");
+
+            assert!(cert_read.userids().any(|u| u.userid() == &userid));
+        }
 
         Ok(())
     }
