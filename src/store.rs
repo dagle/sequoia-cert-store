@@ -416,6 +416,185 @@ pub trait Store<'a> {
     }
 }
 
+// The references in Store need a different lifetime from the contents
+// of the Box.  Otherwise, a `Backend` that is a `&Box<Store>` would
+// create a self referential data structure.
+impl<'a: 't, 't, T> Store<'a> for Box<T>
+where T: Store<'a> + ?Sized + 't
+{
+    fn by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.as_ref().by_cert(kh)
+    }
+
+    fn by_cert_fpr(&self, fingerprint: &Fingerprint)
+        -> Result<Cow<LazyCert<'a>>>
+    {
+        self.as_ref().by_cert_fpr(fingerprint)
+    }
+
+    fn by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.as_ref().by_key(kh)
+    }
+
+    fn select_userid(&self, query: &UserIDQueryParams, pattern: &str)
+        -> Result<Vec<Cow<LazyCert<'a>>>>
+    {
+        self.as_ref().select_userid(query, pattern)
+    }
+
+    fn by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.as_ref().by_userid(userid)
+    }
+
+    fn grep_userid(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.as_ref().grep_userid(pattern)
+    }
+
+    fn by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.as_ref().by_email(email)
+    }
+
+    fn grep_email(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.as_ref().grep_email(pattern)
+    }
+
+    fn by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.as_ref().by_email_domain(domain)
+    }
+
+    fn list<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
+        self.as_ref().list()
+    }
+
+    fn iter<'b>(&'b self)
+        -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
+        where 'a: 'b
+    {
+        self.as_ref().iter()
+    }
+
+    fn precompute(&self) {
+        self.as_ref().precompute()
+    }
+}
+
+impl<'a: 't, 't, T> Store<'a> for &'t T
+where T: Store<'a> + ?Sized
+{
+    fn by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (*self).by_cert(kh)
+    }
+
+    fn by_cert_fpr(&self, fingerprint: &Fingerprint)
+        -> Result<Cow<LazyCert<'a>>>
+    {
+        (*self).by_cert_fpr(fingerprint)
+    }
+
+    fn by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (*self).by_key(kh)
+    }
+
+    fn select_userid(&self, query: &UserIDQueryParams, pattern: &str)
+        -> Result<Vec<Cow<LazyCert<'a>>>>
+    {
+        (*self).select_userid(query, pattern)
+    }
+
+    fn by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (*self).by_userid(userid)
+    }
+
+    fn grep_userid(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (*self).grep_userid(pattern)
+    }
+
+    fn by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (*self).by_email(email)
+    }
+
+    fn grep_email(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (*self).grep_email(pattern)
+    }
+
+    fn by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (*self).by_email_domain(domain)
+    }
+
+    fn list<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
+        (*self).list()
+    }
+
+    fn iter<'b>(&'b self)
+        -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
+        where 'a: 'b
+    {
+        (*self).iter()
+    }
+
+    fn precompute(&self) {
+        (*self).precompute()
+    }
+}
+
+impl<'a: 't, 't, T> Store<'a> for &'t mut T
+where T: Store<'a> + ?Sized
+{
+    fn by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (**self).by_cert(kh)
+    }
+
+    fn by_cert_fpr(&self, fingerprint: &Fingerprint)
+        -> Result<Cow<LazyCert<'a>>>
+    {
+        (**self).by_cert_fpr(fingerprint)
+    }
+
+    fn by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (**self).by_key(kh)
+    }
+
+    fn select_userid(&self, query: &UserIDQueryParams, pattern: &str)
+        -> Result<Vec<Cow<LazyCert<'a>>>>
+    {
+        (**self).select_userid(query, pattern)
+    }
+
+    fn by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (**self).by_userid(userid)
+    }
+
+    fn grep_userid(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (**self).grep_userid(pattern)
+    }
+
+    fn by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (**self).by_email(email)
+    }
+
+    fn grep_email(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (**self).grep_email(pattern)
+    }
+
+    fn by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (**self).by_email_domain(domain)
+    }
+
+    fn list<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
+        (**self).list()
+    }
+
+    fn iter<'b>(&'b self)
+        -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
+        where 'a: 'b
+    {
+        (**self).iter()
+    }
+
+    fn precompute(&self) {
+        (**self).precompute()
+    }
+}
 /// Provides an interface to update a backing store.
 pub trait StoreUpdate<'a>: Store<'a> {
     // Insert a certificate.
@@ -430,4 +609,117 @@ pub trait StoreUpdate<'a>: Store<'a> {
 
     // Insert a certificate.
     fn insert_lazy_cert(&mut self, cert: LazyCert<'a>) -> Result<()>;
+}
+
+impl<'a: 't, 't, T> StoreUpdate<'a> for Box<T>
+where T: StoreUpdate<'a> + ?Sized + 't
+{
+    fn insert_cert(&mut self, cert: Cert) -> Result<()> {
+        self.as_mut().insert_cert(cert)
+    }
+
+    fn insert_raw_cert(&mut self, cert: RawCert<'a>) -> Result<()> {
+        self.as_mut().insert_raw_cert(cert)
+    }
+
+    fn insert_lazy_cert(&mut self, cert: LazyCert<'a>) -> Result<()> {
+        self.as_mut().insert_lazy_cert(cert)
+    }
+}
+
+impl<'a: 't, 't, T> StoreUpdate<'a> for &'t mut T
+where T: StoreUpdate<'a> + ?Sized
+{
+    fn insert_cert(&mut self, cert: Cert) -> Result<()> {
+        (*self).insert_cert(cert)
+    }
+
+    fn insert_raw_cert(&mut self, cert: RawCert<'a>) -> Result<()> {
+        (*self).insert_raw_cert(cert)
+    }
+
+    fn insert_lazy_cert(&mut self, cert: LazyCert<'a>) -> Result<()> {
+        (*self).insert_lazy_cert(cert)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::store;
+
+    // Make sure we can pass a &Box<Store> where a generic type
+    // needs to implement Store.
+    #[test]
+    fn store_boxed() -> Result<()> {
+        struct Foo<'a, B>
+        where B: Store<'a>
+        {
+            backend: B,
+            _a: std::marker::PhantomData<&'a ()>,
+        }
+
+        impl<'a, B> Foo<'a, B>
+        where B: Store<'a>
+        {
+            fn new(backend: B) -> Self
+            {
+                Foo {
+                    backend,
+                    _a: std::marker::PhantomData,
+                }
+            }
+
+            fn count(&self) -> usize {
+                self.backend.iter().count()
+            }
+        }
+
+        let backend = store::Certs::from_certs(std::iter::empty())?;
+        let backend: Box<dyn Store> = Box::new(backend);
+        let foo = Foo::new(&backend);
+
+        // Do something (anything) with the backend.
+        assert_eq!(foo.count(), 0);
+
+        Ok(())
+    }
+
+    // Make sure we can pass a &Box<StoreUpdate> where a generic type
+    // needs to implement Store.
+    #[test]
+    fn store_update_boxed() -> Result<()> {
+        struct Foo<'a, B>
+        where B: StoreUpdate<'a>
+        {
+            backend: B,
+            _a: std::marker::PhantomData<&'a ()>,
+        }
+
+        impl<'a, B> Foo<'a, B>
+        where B: StoreUpdate<'a>
+        {
+            fn new(backend: B) -> Self
+            {
+                Foo {
+                    backend,
+                    _a: std::marker::PhantomData,
+                }
+            }
+
+            fn count(&self) -> usize {
+                self.backend.iter().count()
+            }
+        }
+
+        let backend = store::Certs::from_certs(std::iter::empty())?;
+        let mut backend: Box<dyn StoreUpdate> = Box::new(backend);
+        let foo = Foo::new(&mut backend);
+
+        // Do something (anything) with the backend.
+        assert_eq!(foo.count(), 0);
+
+        Ok(())
+    }
 }
