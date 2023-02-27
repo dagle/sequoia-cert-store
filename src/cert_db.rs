@@ -12,6 +12,8 @@ use crate::store;
 use store::StoreError;
 use store::UserIDQueryParams;
 
+use crate::TRACE;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AccessMode {
@@ -190,7 +192,9 @@ impl<'a> CertDB<'a> {
 }
 
 macro_rules! forward {
-    ( $method:ident, append:$to_vec:expr, $self:expr, $($args:ident),* ) => {{
+    ( $method:ident, append:$to_vec:expr, $self:expr, $term:expr, $($args:ident),* ) => {{
+        tracer!(TRACE, format!("{}({})", stringify!($method), $term));
+
         let mut certs = Vec::new();
         let mut err = None;
 
@@ -202,11 +206,21 @@ macro_rules! forward {
                             = err2.downcast_ref::<StoreError>()
                         {
                             // Ignore NotFound.
+                            t!("certd returned nothing");
                         } else {
+                            t!("certd returned: {}", err2);
                             err = Some(err2)
                         }
                     }
-                    Ok(c) => certs.append(&mut $to_vec(c)),
+                    Ok(c) => {
+                        let mut c = $to_vec(c);
+                        t!("certd returned {}",
+                           c.iter()
+                               .map(|cert| cert.fingerprint().to_string())
+                               .collect::<Vec<String>>()
+                               .join(", "));
+                        certs.append(&mut c)
+                    }
                 }
             }
             Err(in_memory) => {
@@ -216,11 +230,21 @@ macro_rules! forward {
                             = err2.downcast_ref::<StoreError>()
                         {
                             // Ignore NotFound.
+                            t!("in-memory returned nothing");
                         } else {
+                            t!("in-memory returned: {}", err2);
                             err = Some(err2)
                         }
                     }
-                    Ok(c) => certs.append(&mut $to_vec(c)),
+                    Ok(c) => {
+                        let mut c = $to_vec(c);
+                        t!("in-memory returned {}",
+                           c.iter()
+                               .map(|cert| cert.fingerprint().to_string())
+                               .collect::<Vec<String>>()
+                               .join(", "));
+                        certs.append(&mut c)
+                    }
                 }
             }
         }
@@ -237,11 +261,21 @@ macro_rules! forward {
                             = err2.downcast_ref::<StoreError>()
                         {
                             // Ignore NotFound.
+                            t!("backend returned nothing");
                         } else {
+                            t!("backend returned: {}", err2);
                             err = Some(err2)
                         }
                     }
-                    Ok(c) => certs.append(&mut $to_vec(c)),
+                    Ok(c) => {
+                        let mut c = $to_vec(c);
+                        t!("backend returned {}",
+                           c.iter()
+                               .map(|cert| cert.fingerprint().to_string())
+                               .collect::<Vec<String>>()
+                               .join(", "));
+                        certs.append(&mut c)
+                    }
                 }
             }
 
@@ -254,17 +288,29 @@ macro_rules! forward {
             if let Some(ks) = $self.keyserver.as_ref() {
                 if let Ok(c) = ks.$method($($args),*) {
                     certs = $to_vec(c);
+                    t!("keyserver returned {}",
+                       certs.iter()
+                           .map(|cert| cert.fingerprint().to_string())
+                           .collect::<Vec<String>>()
+                           .join(", "));
                 }
             }
         }
 
         if certs.is_empty() {
             if let Some(err) = err {
+                t!("query failed: {}", err);
                 Err(err)
             } else {
+                t!("query returned nothing");
                 Ok(certs)
             }
         } else {
+            t!("query returned {}",
+               certs.iter()
+                   .map(|cert| cert.fingerprint().to_string())
+                   .collect::<Vec<String>>()
+                   .join(", "));
             Ok(certs)
         }
     }};
@@ -308,7 +354,7 @@ fn merge<'a, 'b>(mut certs: Vec<Cow<'b, LazyCert<'a>>>)
 
 impl<'a> store::Store<'a> for CertDB<'a> {
     fn by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        let certs = forward!(by_cert, self, kh)?;
+        let certs = forward!(by_cert, self, kh, kh)?;
         if certs.is_empty() {
             Err(StoreError::NotFound(kh.clone()).into())
         } else {
@@ -318,9 +364,10 @@ impl<'a> store::Store<'a> for CertDB<'a> {
 
     fn by_cert_fpr(&self, fingerprint: &Fingerprint) -> Result<Cow<LazyCert<'a>>>
     {
-        let cert = forward!(by_cert_fpr,
-                            append:|c| vec![c], self, fingerprint)?;
-        if let Some(cert) = cert.into_iter().next() {
+        let certs = forward!(by_cert_fpr,
+                             append:|c| vec![c],
+                             self, fingerprint, fingerprint)?;
+        if let Some(cert) = certs.into_iter().next() {
             Ok(cert)
         } else {
             Err(StoreError::NotFound(
@@ -329,7 +376,7 @@ impl<'a> store::Store<'a> for CertDB<'a> {
     }
 
     fn by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        let certs = forward!(by_key, self, kh)?;
+        let certs = forward!(by_key, self, kh, kh)?;
         if certs.is_empty() {
             Err(StoreError::NotFound(kh.clone()).into())
         } else {
@@ -340,7 +387,7 @@ impl<'a> store::Store<'a> for CertDB<'a> {
     fn select_userid(&self, query: &UserIDQueryParams, pattern: &str)
         -> Result<Vec<Cow<LazyCert<'a>>>>
     {
-        let certs = forward!(select_userid, self, query, pattern)?;
+        let certs = forward!(select_userid, self, pattern, query, pattern)?;
         if certs.is_empty() {
             Err(StoreError::NoMatches(pattern.to_string()).into())
         } else {
@@ -349,7 +396,7 @@ impl<'a> store::Store<'a> for CertDB<'a> {
     }
 
     fn by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        let certs = forward!(by_userid, self, userid)?;
+        let certs = forward!(by_userid, self, userid, userid)?;
         if certs.is_empty() {
             Err(StoreError::NoMatches(
                 String::from_utf8_lossy(userid.value()).to_string()).into())
@@ -359,7 +406,7 @@ impl<'a> store::Store<'a> for CertDB<'a> {
     }
 
     fn grep_userid(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        let certs = forward!(grep_userid, self, pattern)?;
+        let certs = forward!(grep_userid, self, pattern, pattern)?;
         if certs.is_empty() {
             Err(StoreError::NoMatches(pattern.to_string()).into())
         } else {
@@ -368,7 +415,7 @@ impl<'a> store::Store<'a> for CertDB<'a> {
     }
 
     fn by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        let certs = forward!(by_email, self, email)?;
+        let certs = forward!(by_email, self, email, email)?;
         if certs.is_empty() {
             Err(StoreError::NoMatches(email.to_string()).into())
         } else {
@@ -377,7 +424,7 @@ impl<'a> store::Store<'a> for CertDB<'a> {
     }
 
     fn grep_email(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        let certs = forward!(grep_email, self, pattern)?;
+        let certs = forward!(grep_email, self, pattern, pattern)?;
         if certs.is_empty() {
             Err(StoreError::NoMatches(pattern.to_string()).into())
         } else {
@@ -386,7 +433,7 @@ impl<'a> store::Store<'a> for CertDB<'a> {
     }
 
     fn by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        let certs = forward!(by_email_domain, self, domain)?;
+        let certs = forward!(by_email_domain, self, domain, domain)?;
         if certs.is_empty() {
             Err(StoreError::NoMatches(domain.to_string()).into())
         } else {
