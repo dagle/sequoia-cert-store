@@ -367,6 +367,9 @@ impl<'a> store::Store<'a> for CertDB<'a> {
         let certs = forward!(by_cert_fpr,
                              append:|c| vec![c],
                              self, fingerprint, fingerprint)?;
+        // There may be multiple variants.  Merge them.
+        let certs = merge(certs);
+        assert!(certs.len() <= 1);
         if let Some(cert) = certs.into_iter().next() {
             Ok(cert)
         } else {
