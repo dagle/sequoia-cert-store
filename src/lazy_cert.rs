@@ -31,6 +31,19 @@ pub struct LazyCert<'a> {
     cert: OnceCell<Cow<'a, Cert>>,
 }
 
+impl<'a> std::fmt::Debug for LazyCert<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LazyCert")
+            .field("fingerprint", &self.fingerprint())
+            .field("subkeys",
+                   &self.subkeys().map(|k| k.fingerprint())
+                       .collect::<Vec<Fingerprint>>())
+            .field("userids",
+                   &self.userids().collect::<Vec<UserID>>())
+            .finish()
+    }
+}
+
 impl<'a> LazyCert<'a> {
     /// Creates a `LazyCert` from a `Cert`.
     pub fn from_cert(cert: Cert) -> Self {
