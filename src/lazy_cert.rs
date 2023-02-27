@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cell::Ref;
 use std::time::SystemTime;
@@ -27,7 +28,7 @@ pub struct LazyCert<'a> {
     // a `RefCell`, but then we couldn't return bare references to the
     // `Cert`.
     raw: RefCell<Option<RawCert<'a>>>,
-    cert: OnceCell<Cert>,
+    cert: OnceCell<Cow<'a, Cert>>,
 }
 
 impl<'a> LazyCert<'a> {
@@ -38,7 +39,18 @@ impl<'a> LazyCert<'a> {
 
         Self {
             raw: RefCell::new(None),
-            cert: OnceCell::with_value(cert),
+            cert: OnceCell::with_value(Cow::Owned(cert)),
+        }
+    }
+
+    /// Creates a `LazyCert` from a `&Cert`.
+    pub fn from_cert_ref(cert: &'a Cert) -> Self {
+        tracer!(TRACE, "LazyCert::from_cert_ref");
+        t!("Adding a parsed cert: {}", cert.fingerprint());
+
+        Self {
+            raw: RefCell::new(None),
+            cert: OnceCell::with_value(Cow::Borrowed(cert)),
         }
     }
 
@@ -146,7 +158,7 @@ impl<'a> LazyCert<'a> {
             t!("Resolving {}", raw.fingerprint());
             match Cert::try_from(raw) {
                 Ok(cert) => {
-                    self.cert.set(cert)
+                    self.cert.set(Cow::Owned(cert))
                         .expect("just checked that it was empty");
                     clear = true;
                 }
@@ -172,7 +184,7 @@ impl<'a> LazyCert<'a> {
     /// If the `LazyCert` is not yet parsed, parses now.
     pub fn into_cert(self) -> Result<Cert> {
         let _ = self.to_cert()?;
-        Ok(self.cert.into_inner().expect("valid"))
+        Ok(self.cert.into_inner().expect("valid").into_owned())
     }
 
     /// Returns the parsed certificate.
@@ -180,7 +192,7 @@ impl<'a> LazyCert<'a> {
     /// If the `LazyCert` is not yet parsed, parses now.
     pub fn as_cert(&self) -> Result<Cert> {
         let _ = self.to_cert()?;
-        Ok(self.cert.get().expect("valid").clone())
+        Ok(self.cert.get().expect("valid").clone().into_owned())
     }
 
     pub fn with_policy<'b, T>(&'b self, policy: &'b dyn Policy, time: T)
