@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -502,10 +503,22 @@ impl<'a> store::Store<'a> for CertDB<'a> {
 }
 
 impl<'a> store::StoreUpdate<'a> for CertDB<'a> {
-    fn update(&mut self, cert: Cow<LazyCert<'a>>) -> Result<()> {
+    fn update_by<'ra>(&'ra mut self, cert: Cow<'ra, LazyCert<'a>>,
+                      cookie: Option<&mut dyn Any>,
+                      merge_strategy:
+                      for <'b, 'rb, 'c> fn(Cow<'ra, LazyCert<'a>>,
+                                           Option<Cow<'rb, LazyCert<'b>>>,
+                                           Option<&'c mut dyn Any>)
+                                           -> Result<Cow<'ra, LazyCert<'a>>>)
+        -> Result<Cow<'ra, LazyCert<'a>>>
+    {
         match self.certd.as_mut() {
-            Ok(certd) => certd.update(cert),
-            Err(in_memory) => in_memory.update(cert),
+            Ok(certd) => {
+                certd.update_by(cert, cookie, merge_strategy)
+            }
+            Err(in_memory) => {
+                in_memory.update_by(cert, cookie, merge_strategy)
+            }
         }
     }
 }

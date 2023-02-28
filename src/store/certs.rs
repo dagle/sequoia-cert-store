@@ -1,6 +1,9 @@
+use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+
+use anyhow::Context;
 
 use sequoia_openpgp as openpgp;
 use openpgp::cert::prelude::*;
@@ -286,11 +289,45 @@ impl<'a> Store<'a> for Certs<'a>
 }
 
 impl<'a> StoreUpdate<'a> for Certs<'a> {
-    fn update(&mut self, cert: Cow<LazyCert<'a>>) -> Result<()> {
+    fn update_by<'ra>(&'ra mut self, cert: Cow<'ra, LazyCert<'a>>,
+                      cookie: Option<&mut dyn Any>,
+                      merge_strategy:
+                      for <'b, 'rb, 'c> fn(Cow<'ra, LazyCert<'a>>,
+                                           Option<Cow<'rb, LazyCert<'b>>>,
+                                           Option<&'c mut dyn Any>)
+                                           -> Result<Cow<'ra, LazyCert<'a>>>)
+        -> Result<Cow<'ra, LazyCert<'a>>>
+    {
+        tracer!(TRACE, "Certs::update_by");
+
         let fpr = cert.fingerprint();
 
-        // Populate the key map.
-        for k in cert.keys() {
+        // Add the cert fingerprint -> cert entry.
+        let merged: Cow<LazyCert>;
+        match self.certs.entry(fpr.clone()) {
+            Entry::Occupied(mut oe) => {
+                t!("Updating {}", fpr);
+
+                let old = Cow::Borrowed(oe.get());
+
+                merged = merge_strategy(cert, Some(old), cookie)
+                    .with_context(|| {
+                        format!("Merging two version of {}", fpr)
+                    })?;
+
+                *oe.get_mut() = merged.to_owned().into_owned();
+            }
+            Entry::Vacant(ve) => {
+                t!("Inserting {}", fpr);
+
+                merged = merge_strategy(cert, None, cookie)?;
+                ve.insert(merged.to_owned().into_owned());
+            }
+        }
+
+        // Populate the key map.  This is a merge so we are not
+        // removing anything.
+        for k in merged.keys() {
             match self.keys.entry(k.keyid()) {
                 Entry::Occupied(mut oe) => {
                     let fprs = oe.get_mut();
@@ -304,25 +341,8 @@ impl<'a> StoreUpdate<'a> for Certs<'a> {
             }
         }
 
-        self.userid_index.insert(&fpr, cert.userids());
+        self.userid_index.insert(&fpr, merged.userids());
 
-        // Add the cert fingerprint -> cert entry.
-        match self.certs.entry(fpr.clone()) {
-            Entry::Occupied(mut oe) => {
-                let entry = oe.get_mut();
-                if let Ok(a) = entry.to_cert() {
-                    if let Ok(b) = cert.to_cert() {
-                        let merged = a.clone().merge_public(b.clone())
-                            .expect("same cert");
-                        *entry = LazyCert::from_cert(merged);
-                    }
-                }
-            }
-            Entry::Vacant(ve) => {
-                ve.insert(cert.into_owned());
-            }
-        }
-
-        Ok(())
+        Ok(merged)
     }
 }

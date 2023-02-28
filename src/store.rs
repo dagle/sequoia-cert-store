@@ -1,5 +1,8 @@
+use std::any::Any;
 use std::borrow::Cow;
 use std::str;
+
+use anyhow::Context;
 
 use sequoia_openpgp as openpgp;
 use openpgp::Fingerprint;
@@ -652,13 +655,43 @@ where T: Store<'a> + ?Sized
         (**self).precompute()
     }
 }
+
 /// Provides an interface to update a backing store.
 pub trait StoreUpdate<'a>: Store<'a> {
     /// Insert a certificate.
     ///
     /// This uses `Cert::merge_from_public` to merge the certificate
     /// with any existing certificate.
-    fn update(&mut self, cert: Cow<LazyCert<'a>>) -> Result<()>;
+    fn update(&mut self, cert: Cow<LazyCert<'a>>) -> Result<()> {
+        self.update_by(cert, None, store_update_merge_public)?;
+
+        Ok(())
+    }
+
+    /// Inserts a certificate into the store.
+    ///
+    /// Inserts a certificate into the store and uses `merge_strategy`
+    /// to merge it with the existing certificate, if any.
+    ///
+    /// Unless there is an error, you must call `merge_strategy`.
+    /// This is the case even if the certificate is not on the
+    /// backend.  In that case, you would pass `None` for the on-disk
+    /// version.  This allows `merge_strategy` to generate statistics,
+    /// and to modify the certificate before it is saved, e.g., by
+    /// stripping third-party certifications.
+    ///
+    /// Because we are using an `fn` pointer, the caller can't pass a
+    /// closure that captures any local variables.  To work around
+    /// this, `cookie` is passed through.  Pass your variable by doing:
+    /// `Some(&mut (Box::new(cookie) as Box<dyn Any>))`.
+    fn update_by<'ra>(&'ra mut self, cert: Cow<'ra, LazyCert<'a>>,
+                      cookie: Option<&mut dyn Any>,
+                      merge_strategy:
+                      for <'b, 'rb, 'c> fn(Cow<'ra, LazyCert<'a>>,
+                                           Option<Cow<'rb, LazyCert<'b>>>,
+                                           Option<&'c mut dyn Any>)
+                                           -> Result<Cow<'ra, LazyCert<'a>>>)
+        -> Result<Cow<'ra, LazyCert<'a>>>;
 }
 
 impl<'a: 't, 't, T> StoreUpdate<'a> for Box<T>
@@ -667,6 +700,18 @@ where T: StoreUpdate<'a> + ?Sized + 't
     fn update(&mut self, cert: Cow<LazyCert<'a>>) -> Result<()> {
         self.as_mut().update(cert)
     }
+
+    fn update_by<'ra>(&'ra mut self, cert: Cow<'ra, LazyCert<'a>>,
+                      cookie: Option<&mut dyn Any>,
+                      merge_strategy:
+                      for <'b, 'rb, 'c> fn(Cow<'ra, LazyCert<'a>>,
+                                           Option<Cow<'rb, LazyCert<'b>>>,
+                                           Option<&'c mut dyn Any>)
+                                           -> Result<Cow<'ra, LazyCert<'a>>>)
+        -> Result<Cow<'ra, LazyCert<'a>>>
+    {
+        self.as_mut().update_by(cert, cookie, merge_strategy)
+    }
 }
 
 impl<'a: 't, 't, T> StoreUpdate<'a> for &'t mut T
@@ -674,6 +719,172 @@ where T: StoreUpdate<'a> + ?Sized
 {
     fn update(&mut self, cert: Cow<LazyCert<'a>>) -> Result<()> {
         (*self).update(cert)
+    }
+
+    fn update_by<'ra>(&'ra mut self, cert: Cow<'ra, LazyCert<'a>>,
+                      cookie: Option<&mut dyn Any>,
+                      merge_strategy:
+                      for <'b, 'rb, 'c> fn(Cow<'ra, LazyCert<'a>>,
+                                           Option<Cow<'rb, LazyCert<'b>>>,
+                                           Option<&'c mut dyn Any>)
+                                           -> Result<Cow<'ra, LazyCert<'a>>>)
+        -> Result<Cow<'ra, LazyCert<'a>>>
+    {
+        (*self).update_by(cert, cookie, merge_strategy)
+    }
+}
+
+/// Merges two certificates.
+///
+/// This is primarily useful as the `merge_strategy` callback to
+/// [`StoreUpdate::update_by`].
+///
+/// This merges the two certificates using [`Cert::merge_public`].
+/// When a variant of a packet is present in the on-disk version and
+/// the new version, the variant in the new version is preferred.
+/// This can be the case with signature packets, for instance, when
+/// the unhashed subpacket areas differ, but the signatures are
+/// otherwise the same.
+pub fn store_update_merge_public<'a: 'ra, 'ra, 'b, 'rb, 'c>(
+    new: Cow<'ra, LazyCert<'a>>,
+    disk: Option<Cow<'rb, LazyCert<'b>>>,
+    _cookie: Option<&mut dyn Any>)
+    -> Result<Cow<'ra, LazyCert<'a>>>
+{
+    if let Some(disk) = disk {
+        let merged = new.into_owned().into_cert()?
+            .merge_public(disk.as_cert()?)?;
+        Ok(Cow::Owned(LazyCert::from(merged)))
+    } else {
+        Ok(new)
+    }
+}
+
+/// Used by `store_update_merge_public_stats` to record statistics.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct UpdateStats {
+    /// Number of new certificates.
+    pub new: usize,
+
+    /// Number of unchanged certificates.
+    ///
+    /// Note: there may be false negative.  That is some certificates
+    /// may be unchanged, but the heuristic thinks that they have been
+    /// updated.
+    pub unchanged: usize,
+
+    /// Number of update certificates.
+    pub updated: usize,
+
+    /// Number of errors.
+    pub errors: usize,
+}
+
+impl UpdateStats {
+    /// Returns a new `UpdateStats` with all stats set to 0.
+    pub fn new() -> Self {
+        Self {
+            new: 0,
+            unchanged: 0,
+            updated: 0,
+            errors: 0,
+        }
+    }
+}
+
+/// Merges two certificates.
+///
+/// This is primarily useful as the `merge_strategy` callback to
+/// [`StoreUpdate::update_by`].
+///
+/// This function has the same semantics as
+/// `store_update_merge_public`, but it also updates the statistics in
+/// `cookie`, if `cookie` can be downcast to a `Box<UpdateStats>`.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::any::Any;
+/// use std::borrow::Cow;
+///
+/// use sequoia_openpgp as openpgp;
+/// # use openpgp::Result;
+/// use openpgp::cert::prelude::*;
+/// use openpgp::parse::Parse;
+///
+/// use sequoia_cert_db as cert_db;
+/// use cert_db::CertDB;
+/// use cert_db::LazyCert;
+/// use cert_db::store::store_update_merge_public_stats;
+/// use cert_db::store::UpdateStats;
+/// use cert_db::StoreUpdate;
+///
+/// # fn main() -> Result<()> {
+/// let (cert, _rev) = CertBuilder::new().generate()?;
+///
+/// let mut certdb = CertDB::empty();
+///
+/// let mut stats = Box::new(UpdateStats::new());
+///
+/// certdb.update_by(
+///         Cow::Owned(LazyCert::from(cert)),
+///         Some(&mut stats as &mut dyn Any),
+///         store_update_merge_public_stats)
+///         .expect("valid");
+///
+/// assert_eq!(stats.new, 1);
+/// # Ok(()) }
+/// ```
+pub fn store_update_merge_public_stats<'a: 'ra, 'ra, 'b, 'rb, 'c>(
+    new: Cow<'ra, LazyCert<'a>>,
+    disk: Option<Cow<'rb, LazyCert<'b>>>,
+    cookie: Option<&mut dyn Any>)
+    -> Result<Cow<'ra, LazyCert<'a>>>
+{
+    let stats = cookie.and_then(|stats| {
+        stats.downcast_mut::<Box<UpdateStats>>()
+    });
+
+    let disk = if let Some(disk) = disk {
+        disk
+    } else {
+        stats.map(|mut stats| stats.new += 1);
+        return Ok(new);
+    };
+
+    let fpr = new.fingerprint();
+
+    let disk = disk.into_owned().as_cert()
+        .with_context(|| {
+            format!("Parsing {} as returned from the cert directory", fpr)
+        })?;
+
+    let new = new.into_owned().as_cert()
+        .with_context(|| {
+            format!("Parsing {} as being inserted into \
+                     the cert directory",
+                    fpr)
+        })?;
+
+    // If the on-disk version has secrets, we
+    // preserve them.
+    let disk_packets = disk.into_packets();
+
+    match new.insert_packets2(disk_packets) {
+        Ok((merged, changed)) => {
+            if changed {
+                stats.map(|mut stats| stats.updated += 1);
+            } else {
+                stats.map(|mut stats| stats.unchanged += 1);
+            }
+
+            Ok(Cow::Owned(LazyCert::from(merged)))
+        }
+        Err(err) => {
+            stats.map(|mut stats| stats.errors += 1);
+            Err(err.into())
+        }
     }
 }
 
@@ -792,5 +1003,75 @@ mod tests {
         assert!(UserIDQueryParams::is_domain("foo@@domain.com").is_err());
         assert!(UserIDQueryParams::is_domain("foo@a@domain.com").is_err());
         assert!(UserIDQueryParams::is_domain("<foo@domain.com>").is_err());
+    }
+
+    include!("../tests/keyring.rs");
+
+    // Check that the store_update_merge_public_stats works as
+    // advertised.
+    #[test]
+    fn store_update_merge_public_stats() {
+        use std::any::Any;
+        use std::borrow::Cow;
+        use std::collections::HashSet;
+
+        use openpgp::Cert;
+        use openpgp::parse::Parse;
+
+        use crate::CertDB;
+        use crate::store::store_update_merge_public_stats;
+        use crate::store::UpdateStats;
+
+        assert_eq!(keyring::certs.len(), 10);
+
+        let mut certdb = CertDB::empty();
+
+        let mut stats = Box::new(UpdateStats::new());
+
+        let mut seen = HashSet::new();
+
+        for (i, cert) in keyring::certs.iter().enumerate() {
+            let cert = Cert::from_bytes(&cert.bytes()).expect("valid");
+            let fpr = cert.fingerprint();
+            seen.insert(fpr.clone());
+
+            certdb.update_by(
+                Cow::Owned(LazyCert::from(cert)),
+                Some(&mut stats as &mut dyn Any),
+                store_update_merge_public_stats)
+                .expect("valid");
+
+            eprintln!("After inserting {} ({}), stats: {:?}",
+                      i, fpr, stats);
+
+            assert_eq!(stats.new, seen.len());
+            assert_eq!(stats.new + stats.updated + stats.unchanged, i + 1);
+        }
+
+        let new = stats.new;
+        let updated = stats.updated;
+        let unchanged = stats.unchanged;
+
+        // Insert again.  This time nothing should change.
+        for (i, cert) in keyring::certs.iter().enumerate() {
+            let cert = Cert::from_bytes(&cert.bytes()).expect("valid");
+            let fpr = cert.fingerprint();
+
+            certdb.update_by(
+                Cow::Owned(LazyCert::from(cert)),
+                Some(&mut stats as &mut dyn Any),
+                store_update_merge_public_stats)
+                .expect("valid");
+
+            eprintln!("After reinserting {} ({}), stats: {:?}",
+                      i, fpr, stats);
+
+            // These should not change:
+            assert_eq!(stats.new, new);
+            // Update should also not change, but there may be false
+            // positives.
+            assert_eq!(stats.unchanged + stats.updated,
+                       updated + unchanged + i + 1);
+        }
     }
 }

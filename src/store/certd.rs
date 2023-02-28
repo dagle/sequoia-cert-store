@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map;
@@ -7,10 +8,13 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::str;
 
+use anyhow::Context;
+
 use sequoia_openpgp as openpgp;
 use openpgp::Fingerprint;
 use openpgp::KeyHandle;
 use openpgp::KeyID;
+use openpgp::Packet;
 use openpgp::Result;
 use openpgp::cert::raw::RawCertParser;
 use openpgp::cert::prelude::*;
@@ -402,18 +406,60 @@ impl<'a> Store<'a> for CertD<'a> {
 }
 
 impl<'a> StoreUpdate<'a> for CertD<'a> {
-    fn update(&mut self, cert: Cow<LazyCert<'a>>) -> Result<()> {
-        self.certd.insert(cert.to_vec()?.into(), |new, old| {
-            if let Some(old) = old {
-                Ok(Cert::from_bytes(&old)?
-                   .merge_public(Cert::from_bytes(&new)?)?
-                   .to_vec()?.into())
+    fn update_by<'ra>(&'ra mut self, cert: Cow<'ra, LazyCert<'a>>,
+                      cookie: Option<&mut dyn Any>,
+                      merge_strategy:
+                      for <'b, 'rb, 'c> fn(Cow<'ra, LazyCert<'a>>,
+                                           Option<Cow<'rb, LazyCert<'b>>>,
+                                           Option<&'c mut dyn Any>)
+                                           -> Result<Cow<'ra, LazyCert<'a>>>)
+        -> Result<Cow<'ra, LazyCert<'a>>>
+    {
+        // This is slightly annoying: cert-d expects bytes.  But
+        // serializing cert is a complete waste if we have to merge
+        // the certificate with another one.  cert-d actually only
+        // needs the primary key, which it uses to derive the
+        // fingerprint, so, we only serialize that.
+        let fpr = cert.fingerprint();
+        let cert_stub = Cert::from_packets(
+            std::iter::once(Packet::from(cert.primary_key())))?
+            .to_vec()?
+            .into_boxed_slice();
+
+        let mut merged = None;
+        self.certd.insert(cert_stub, |_cert_stub, disk_bytes| {
+            let disk: Option<Cow<LazyCert>>
+                = if let Some(disk_bytes) = disk_bytes.as_ref()
+            {
+                let mut parser = RawCertParser::from_bytes(disk_bytes)
+                    .with_context(|| {
+                        format!("Parsing {} as returned from the cert directory",
+                                fpr)
+                    })?;
+                let disk = parser.next().transpose()
+                    .with_context(|| {
+                        format!("Parsing {} as returned from the cert directory",
+                                fpr)
+                    })?;
+                if let Some(disk) = disk {
+                    Some(Cow::Owned(LazyCert::from(disk)))
+                } else {
+                    None
+                }
             } else {
-                Ok(new)
-            }
+                None
+            };
+
+            let merged_ = merge_strategy(cert, disk, cookie)
+                .with_context(|| {
+                    format!("Merging versions of {}", fpr)
+                })?;
+            let bytes = merged_.to_vec()?.into_boxed_slice();
+            merged = Some(merged_);
+            Ok(bytes)
         })?;
 
-        Ok(())
+        Ok(merged.expect("set"))
     }
 }
 
