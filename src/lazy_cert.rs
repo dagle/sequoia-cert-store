@@ -224,6 +224,12 @@ impl<'a> From<Cert> for LazyCert<'a> {
     }
 }
 
+impl<'a> From<&'a Cert> for LazyCert<'a> {
+    fn from(cert: &'a Cert) -> Self {
+        LazyCert::from_cert_ref(cert)
+    }
+}
+
 impl<'a> From<RawCert<'a>> for LazyCert<'a> {
     fn from(cert: RawCert<'a>) -> Self {
         LazyCert::from_raw_cert(cert)
