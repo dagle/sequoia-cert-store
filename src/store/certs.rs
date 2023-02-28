@@ -6,8 +6,6 @@ use std::collections::hash_map::Entry;
 use anyhow::Context;
 
 use sequoia_openpgp as openpgp;
-use openpgp::cert::prelude::*;
-use openpgp::cert::raw::RawCert;
 use openpgp::cert::raw::RawCertParser;
 use openpgp::Fingerprint;
 use openpgp::KeyID;
@@ -66,39 +64,17 @@ impl<'a> Certs<'a>
                     }
                 }
             });
-        Self::from_raw_certs(raw_certs)
+        Self::from_certs(raw_certs)
     }
 
     /// Returns a new `Certs`.
-    pub fn from_certs(certs: impl Iterator<Item=Cert>)
+    pub fn from_certs<I>(certs: impl IntoIterator<Item=I>)
         -> Result<Self>
+        where I: Into<LazyCert<'a>>
     {
-        Self::from_lazy_certs(certs.map(LazyCert::from_cert))
-    }
-
-    /// Returns a new `Certs`.
-    pub fn from_cert_refs(certs: impl Iterator<Item=&'a Cert>)
-        -> Result<Self>
-    {
-        Self::from_lazy_certs(certs.map(LazyCert::from_cert_ref))
-    }
-
-    /// Returns a new `Certs`.
-    pub fn from_raw_certs(raw_certs: impl Iterator<Item=RawCert<'a>>)
-        -> Result<Self>
-    {
-        Self::from_lazy_certs(raw_certs.map(LazyCert::from_raw_cert))
-    }
-
-    /// Returns a new `Certs`.
-    pub fn from_lazy_certs(certs: impl Iterator<Item=LazyCert<'a>>)
-        -> Result<Self>
-    {
-        tracer!(TRACE, "Certs::from_raw_certs");
-
         let mut r = Self::empty();
         for cert in certs {
-            r.update(Cow::Owned(cert)).expect("implementation doesn't fail")
+            r.update(Cow::Owned(cert.into())).expect("implementation doesn't fail")
         }
 
         Ok(r)

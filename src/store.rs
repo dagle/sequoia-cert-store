@@ -921,7 +921,7 @@ mod tests {
             }
         }
 
-        let backend = store::Certs::from_certs(std::iter::empty())?;
+        let backend = store::Certs::empty();
         let backend: Box<dyn Store> = Box::new(backend);
         let foo = Foo::new(&backend);
 
@@ -958,7 +958,7 @@ mod tests {
             }
         }
 
-        let backend = store::Certs::from_certs(std::iter::empty())?;
+        let backend = store::Certs::empty();
         let mut backend: Box<dyn StoreUpdate> = Box::new(backend);
         let foo = Foo::new(&mut backend);
 
