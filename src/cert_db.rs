@@ -502,7 +502,7 @@ impl<'a> store::Store<'a> for CertDB<'a> {
 }
 
 impl<'a> store::StoreUpdate<'a> for CertDB<'a> {
-    fn update(&mut self, cert: LazyCert<'a>) -> Result<()> {
+    fn update(&mut self, cert: Cow<LazyCert<'a>>) -> Result<()> {
         match self.certd.as_mut() {
             Ok(certd) => certd.update(cert),
             Err(in_memory) => in_memory.update(cert),

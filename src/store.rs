@@ -658,13 +658,13 @@ pub trait StoreUpdate<'a>: Store<'a> {
     ///
     /// This uses `Cert::merge_from_public` to merge the certificate
     /// with any existing certificate.
-    fn update(&mut self, cert: LazyCert<'a>) -> Result<()>;
+    fn update(&mut self, cert: Cow<LazyCert<'a>>) -> Result<()>;
 }
 
 impl<'a: 't, 't, T> StoreUpdate<'a> for Box<T>
 where T: StoreUpdate<'a> + ?Sized + 't
 {
-    fn update(&mut self, cert: LazyCert<'a>) -> Result<()> {
+    fn update(&mut self, cert: Cow<LazyCert<'a>>) -> Result<()> {
         self.as_mut().update(cert)
     }
 }
@@ -672,7 +672,7 @@ where T: StoreUpdate<'a> + ?Sized + 't
 impl<'a: 't, 't, T> StoreUpdate<'a> for &'t mut T
 where T: StoreUpdate<'a> + ?Sized
 {
-    fn update(&mut self, cert: LazyCert<'a>) -> Result<()> {
+    fn update(&mut self, cert: Cow<LazyCert<'a>>) -> Result<()> {
         (*self).update(cert)
     }
 }

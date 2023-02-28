@@ -402,7 +402,7 @@ impl<'a> Store<'a> for CertD<'a> {
 }
 
 impl<'a> StoreUpdate<'a> for CertD<'a> {
-    fn update(&mut self, cert: LazyCert<'a>) -> Result<()> {
+    fn update(&mut self, cert: Cow<LazyCert<'a>>) -> Result<()> {
         self.certd.insert(cert.to_vec()?.into(), |new, old| {
             if let Some(old) = old {
                 Ok(Cert::from_bytes(&old)?

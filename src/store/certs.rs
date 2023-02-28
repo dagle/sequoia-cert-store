@@ -95,7 +95,7 @@ impl<'a> Certs<'a>
 
         let mut r = Self::empty();
         for cert in certs {
-            r.update(cert).expect("implementation doesn't fail")
+            r.update(Cow::Owned(cert)).expect("implementation doesn't fail")
         }
 
         Ok(r)
@@ -286,7 +286,7 @@ impl<'a> Store<'a> for Certs<'a>
 }
 
 impl<'a> StoreUpdate<'a> for Certs<'a> {
-    fn update(&mut self, cert: LazyCert<'a>) -> Result<()> {
+    fn update(&mut self, cert: Cow<LazyCert<'a>>) -> Result<()> {
         let fpr = cert.fingerprint();
 
         // Populate the key map.
@@ -319,7 +319,7 @@ impl<'a> StoreUpdate<'a> for Certs<'a> {
                 }
             }
             Entry::Vacant(ve) => {
-                ve.insert(cert);
+                ve.insert(cert.into_owned());
             }
         }
 
