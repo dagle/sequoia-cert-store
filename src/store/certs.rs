@@ -203,12 +203,12 @@ impl<'a> Store<'a> for Certs<'a>
             .map(|cert| Cow::Borrowed(cert)))
     }
 
-    fn precompute(&self) {
+    fn prefetch(&self) {
         // XXX: LazyCert is current not Sync and not Send (due to the
         // use of RefCell).  That means the following doesn't work.
         // We need to decide if we want to use Arc instead of Rc, etc.
 
-//        tracer!(TRACE, "Certs::precompute");
+//        tracer!(TRACE, "Certs::prefetch");
 //
 //        use crossbeam::thread;
 //        use crossbeam::channel::unbounded as channel;

@@ -472,7 +472,7 @@ pub trait Store<'a> {
     ///
     /// Errors should be silently ignored and propagated when the
     /// operation in question is executed directly.
-    fn precompute(&self) {
+    fn prefetch(&self) {
     }
 }
 
@@ -533,8 +533,8 @@ where T: Store<'a> + ?Sized + 't
         self.as_ref().iter()
     }
 
-    fn precompute(&self) {
-        self.as_ref().precompute()
+    fn prefetch(&self) {
+        self.as_ref().prefetch()
     }
 }
 
@@ -592,8 +592,8 @@ where T: Store<'a> + ?Sized
         (*self).iter()
     }
 
-    fn precompute(&self) {
-        (*self).precompute()
+    fn prefetch(&self) {
+        (*self).prefetch()
     }
 }
 
@@ -651,8 +651,8 @@ where T: Store<'a> + ?Sized
         (**self).iter()
     }
 
-    fn precompute(&self) {
-        (**self).precompute()
+    fn prefetch(&self) {
+        (**self).prefetch()
     }
 }
 

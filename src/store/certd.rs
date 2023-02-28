@@ -401,7 +401,7 @@ impl<'a> Store<'a> for CertD<'a> {
         Ok(matches)
     }
 
-    fn precompute(&self) {
+    fn prefetch(&self) {
     }
 }
 
