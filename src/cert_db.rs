@@ -512,11 +512,14 @@ impl<'a> store::StoreUpdate<'a> for CertDB<'a> {
                                            -> Result<Cow<'ra, LazyCert<'a>>>)
         -> Result<Cow<'ra, LazyCert<'a>>>
     {
+        tracer!(TRACE, "CertDB::update_by");
         match self.certd.as_mut() {
             Ok(certd) => {
+                t!("Forwarding to underlying certd");
                 certd.update_by(cert, cookie, merge_strategy)
             }
             Err(in_memory) => {
+                t!("Forwarding to underlying in-memory DB");
                 in_memory.update_by(cert, cookie, merge_strategy)
             }
         }

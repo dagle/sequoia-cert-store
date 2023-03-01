@@ -441,6 +441,9 @@ impl<'a> StoreUpdate<'a> for CertD<'a> {
                                            -> Result<Cow<'ra, LazyCert<'a>>>)
         -> Result<Cow<'ra, LazyCert<'a>>>
     {
+        tracer!(TRACE, "CertD::update_by");
+        t!("Inserting {}", cert.fingerprint());
+
         // This is slightly annoying: cert-d expects bytes.  But
         // serializing cert is a complete waste if we have to merge
         // the certificate with another one.  cert-d actually only
@@ -461,11 +464,19 @@ impl<'a> StoreUpdate<'a> for CertD<'a> {
                     .with_context(|| {
                         format!("Parsing {} as returned from the cert directory",
                                 fpr)
+                    })
+                    .map_err(|err| {
+                        t!("Reading disk version: {}", err);
+                        err
                     })?;
                 let disk = parser.next().transpose()
                     .with_context(|| {
                         format!("Parsing {} as returned from the cert directory",
                                 fpr)
+                    })
+                    .map_err(|err| {
+                        t!("Parsing disk version: {}", err);
+                        err
                     })?;
                 if let Some(disk) = disk {
                     Some(Cow::Owned(LazyCert::from(disk)))
@@ -473,12 +484,17 @@ impl<'a> StoreUpdate<'a> for CertD<'a> {
                     None
                 }
             } else {
+                t!("No disk version");
                 None
             };
 
             let merged_ = merge_strategy(cert, disk, cookie)
                 .with_context(|| {
                     format!("Merging versions of {}", fpr)
+                })
+                .map_err(|err| {
+                    t!("Merging: {}", err);
+                    err
                 })?;
             let bytes = merged_.to_vec()?.into_boxed_slice();
             merged = Some(merged_);
