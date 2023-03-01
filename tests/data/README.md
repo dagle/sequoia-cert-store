@@ -40,12 +40,6 @@ $ for i in $(ls -1 *.pgp | grep -v -- -priv.pgp | sort); do echo; echo "- $i:"; 
       Key flags: authentication
          UserID: <carol@club.org>
          UserID: <carol@verein.de>
-- david-2.pgp:
-    Fingerprint: A82BC944220BD5EBECC4D42883F74A0EAC207446
-      Key flags: certification
-         Subkey: DF674FBAC52E00F0E6E48436481D2E18158FB594
-      Key flags: authentication
-         UserID: <david@example.org>
 - david.pgp:
     Fingerprint: A82BC944220BD5EBECC4D42883F74A0EAC207446
       Key flags: certification
@@ -58,6 +52,42 @@ $ for i in $(ls -1 *.pgp | grep -v -- -priv.pgp | sort); do echo; echo "- $i:"; 
          Subkey: 0C346B2B6241263F64E9C7CF1EA300797258A74E
       Key flags: certification
          UserID: <ed@example.org>
+- halfling-encryption.pgp:
+    Fingerprint: D58E047C05D115EA4F3D1A98A67A733127BBE804
+      Key flags: certification
+         Subkey: 9DCDA2A95A17B728D6A5115EFF5C6582E4D14B68
+      Key flags: signing
+         Subkey: CC4EFA3BFAB8E92A54CDEA3F3DC7543293DD4E53
+      Key flags: transport encryption, data-at-rest encryption
+         UserID: <regis@pup.com>
+         UserID: Halfling <encryption@halfling.org>
+- halfling-signing.pgp:
+    Fingerprint: D58E047C05D115EA4F3D1A98A67A733127BBE804
+      Key flags: certification
+         Subkey: 69669E91C8D5C546D442FB246FE6D4751AC09E15
+      Key flags: authentication
+         Subkey: 9DCDA2A95A17B728D6A5115EFF5C6582E4D14B68
+      Key flags: signing
+         UserID: <regis@pup.com>
+         UserID: Halfling <signing@halfling.org>
+- hans-puny-code.pgp:
+    Fingerprint: F6675D0E4DA40823715C4811B89491F07D08E4F8
+      Key flags: certification
+         Subkey: 3F60EA0AEBC13E290939A080DB1F5F11C17CB2D4
+      Key flags: signing
+         UserID: Hans <hans@xn--bcher-kva.tld>
+- steve.pgp:
+    Fingerprint: 217E256E176719A5452EDFF935AADEC66B56585B
+      Key flags: certification
+         Subkey: 32C5820540308752B7092EE5B596B656FD8F700B
+      Key flags: signing
+         UserID: Steve <steve@sub.company.com>
+- una.pgp:
+    Fingerprint: 119B01460659D8EF3732BEC271424ADE3EC61BBC
+      Key flags: certification
+         Subkey: EE58C32E3D2336F223BD89CED0BE447BF39B439F
+      Key flags: signing
+         UserID: Una <una@company.com>
 ```
 
 alice: A normal certificate with two User IDs.  Shares one with alice.
@@ -79,6 +109,13 @@ appended to david's certificate, but there is no binding signature.
 
 ed: An unusual certificate: his primary key is also a subkey on his
 certificate!
+
+halfling: Two versions of the same certificate.  Both have the same
+authentication subkey, one has a signing subkey, the other an
+encryption subkey.  Likewise, both have one User ID in common
+(regis@pup.com) and a second User ID ('Halfling
+<encryption@halfling.org>' and 'Halfling <signing@halfling.org>',
+respectively).
 
 hans: A certificate with an email address that uses puny code.
 

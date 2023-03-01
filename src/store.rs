@@ -1022,7 +1022,7 @@ mod tests {
         use crate::store::store_update_merge_public_stats;
         use crate::store::UpdateStats;
 
-        assert_eq!(keyring::certs.len(), 10);
+        assert_eq!(keyring::certs.len(), 12);
 
         let mut certdb = CertDB::empty();
 

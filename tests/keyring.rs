@@ -97,6 +97,7 @@
             fingerprint: "A82BC944220BD5EBECC4D42883F74A0EAC207446",
             subkeys: &[
                 "DF674FBAC52E00F0E6E48436481D2E18158FB594",
+                "CD22D4BD99FF10FDA11A83D4213DCB92C95346CE",
             ],
             userids: &[
                 "<david@example.org>",
@@ -112,6 +113,34 @@
             ],
             userids: &[
                 "<ed@example.org>",
+            ],
+        },
+        // halfling_signing
+        Cert {
+            filename: "data/halfling-signing.pgp",
+            base: "halfling_signing",
+            fingerprint: "D58E047C05D115EA4F3D1A98A67A733127BBE804",
+            subkeys: &[
+                "69669E91C8D5C546D442FB246FE6D4751AC09E15",
+                "9DCDA2A95A17B728D6A5115EFF5C6582E4D14B68",
+            ],
+            userids: &[
+                "<regis@pup.com>",
+                "Halfling <signing@halfling.org>",
+            ],
+        },
+        // halfling_encryption
+        Cert {
+            filename: "data/halfling-encryption.pgp",
+            base: "halfling_encryption",
+            fingerprint: "D58E047C05D115EA4F3D1A98A67A733127BBE804",
+            subkeys: &[
+                "69669E91C8D5C546D442FB246FE6D4751AC09E15",
+                "CC4EFA3BFAB8E92A54CDEA3F3DC7543293DD4E53",
+            ],
+            userids: &[
+                "<regis@pup.com>",
+                "Halfling <encryption@halfling.org>",
             ],
         },
         // hans_puny_code
@@ -158,7 +187,9 @@
     pub const carol: &Cert = &certs[4];
     pub const david: &Cert = &certs[5];
     pub const ed: &Cert = &certs[6];
-    pub const hans_puny_code: &Cert = &certs[7];
-    pub const steve: &Cert = &certs[8];
-    pub const una: &Cert = &certs[9];
+    pub const halfling_signing: &Cert = &certs[7];
+    pub const halfling_encryption: &Cert = &certs[8];
+    pub const hans_puny_code: &Cert = &certs[9];
+    pub const steve: &Cert = &certs[10];
+    pub const una: &Cert = &certs[11];
 } // mod keyring

@@ -688,7 +688,7 @@ mod tests {
         use std::io::Read;
 
         // We expect 8 certificates.
-        assert_eq!(keyring::certs.len(), 10);
+        assert_eq!(keyring::certs.len(), 12);
 
         let path = tempfile::tempdir()?;
         let certd = cert_d::CertD::with_base_dir(&path)
@@ -729,7 +729,7 @@ mod tests {
         use std::io::Read;
 
         // Sanity check how many certificates we read.
-        assert_eq!(keyring::certs.len(), 10);
+        assert_eq!(keyring::certs.len(), 12);
 
         let path = tempfile::tempdir()?;
         let certd = cert_d::CertD::with_base_dir(&path)
@@ -768,7 +768,7 @@ mod tests {
     fn certdb_layered() -> Result<()> {
         use std::io::Read;
 
-        assert_eq!(keyring::certs.len(), 10);
+        assert_eq!(keyring::certs.len(), 12);
 
         // A certd for each certificate.
         let mut paths: Vec<tempfile::TempDir> = Vec::new();
@@ -816,7 +816,7 @@ mod tests {
     fn certs() -> Result<()> {
         use std::io::Read;
 
-        assert_eq!(keyring::certs.len(), 10);
+        assert_eq!(keyring::certs.len(), 12);
 
         let mut bytes = Vec::new();
         for cert in keyring::certs.iter() {

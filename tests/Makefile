@@ -5,6 +5,8 @@ certs = data/alice.pgp \
 	data/carol.pgp \
 	data/david.pgp \
 	data/ed.pgp \
+	data/halfling-signing.pgp \
+	data/halfling-encryption.pgp \
 	data/hans-puny-code.pgp \
 	data/steve.pgp \
 	data/una.pgp
