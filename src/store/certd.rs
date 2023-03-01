@@ -53,7 +53,7 @@ impl<'a> CertD<'a> {
     ///
     /// If path is `None`, then returns the default location.
     ///
-    /// XXX: This (or an equivalent mechnaism) should be provided by
+    /// XXX: This (or an equivalent mechanism) should be provided by
     /// cert-d.
     fn path(path: Option<&Path>) -> Result<PathBuf>
     {
