@@ -316,7 +316,7 @@ impl<'a> Store<'a> for KeyServer<'a> {
         }
     }
 
-    fn list<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
+    fn fingerprints<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
         // Return nothing, not even the entries in our cache.
         Box::new(std::iter::empty())
     }

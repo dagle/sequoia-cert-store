@@ -454,12 +454,12 @@ impl<'a> store::Store<'a> for CertDB<'a> {
         }
     }
 
-    fn list(&self) -> Box<dyn Iterator<Item=Fingerprint> + 'a> {
+    fn fingerprints(&self) -> Box<dyn Iterator<Item=Fingerprint> + 'a> {
         let mut certs = Vec::new();
 
         match self.certd.as_ref() {
-            Ok(certd) => certs.extend(certd.list()),
-            Err(in_memory) => certs.extend(in_memory.list()),
+            Ok(certd) => certs.extend(certd.fingerprints()),
+            Err(in_memory) => certs.extend(in_memory.fingerprints()),
         };
 
         for (backend, mode) in self.backends.iter() {
@@ -467,7 +467,7 @@ impl<'a> store::Store<'a> for CertDB<'a> {
                 continue;
             }
 
-            certs.extend(backend.list());
+            certs.extend(backend.fingerprints());
         }
 
         certs.sort();

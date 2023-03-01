@@ -142,7 +142,7 @@ mod tests {
     {
         // Check Store::list.
         {
-            let mut got: Vec<Fingerprint> = backend.list().collect();
+            let mut got: Vec<Fingerprint> = backend.fingerprints().collect();
             got.sort();
             let mut expected: Vec<Fingerprint> = keyring::certs.iter()
                 .map(|c| c.fingerprint.parse::<Fingerprint>().expect("valid"))

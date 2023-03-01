@@ -445,18 +445,18 @@ pub trait Store<'a> {
     /// by fingerprint, but not to enumerate all of the certificates.
     /// Thus, a user must not assume that if a certificate is not
     /// returned by this function, it cannot be found by name.
-    fn list<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b>;
+    fn fingerprints<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b>;
 
     /// Returns all of the certificates.
     ///
     /// The default implementation is implemented in terms of
-    /// [`Store::list`] and [`Store::lookup_by_cert_fpr`].  Many backends
+    /// [`Store::fingerprints`] and [`Store::lookup_by_cert_fpr`].  Many backends
     /// will be able to do this more efficiently.
     fn certs<'b>(&'b self)
         -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
         where 'a: 'b
     {
-        Box::new(self.list()
+        Box::new(self.fingerprints()
             .filter_map(|fpr| {
                 self.lookup_by_cert_fpr(&fpr).ok()
             }))
@@ -522,8 +522,8 @@ where T: Store<'a> + ?Sized + 't
         self.as_ref().lookup_by_email_domain(domain)
     }
 
-    fn list<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
-        self.as_ref().list()
+    fn fingerprints<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
+        self.as_ref().fingerprints()
     }
 
     fn certs<'b>(&'b self)
@@ -581,8 +581,8 @@ where T: Store<'a> + ?Sized
         (*self).lookup_by_email_domain(domain)
     }
 
-    fn list<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
-        (*self).list()
+    fn fingerprints<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
+        (*self).fingerprints()
     }
 
     fn certs<'b>(&'b self)
@@ -640,8 +640,8 @@ where T: Store<'a> + ?Sized
         (**self).lookup_by_email_domain(domain)
     }
 
-    fn list<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
-        (**self).list()
+    fn fingerprints<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
+        (**self).fingerprints()
     }
 
     fn certs<'b>(&'b self)

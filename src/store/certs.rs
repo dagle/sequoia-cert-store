@@ -168,7 +168,7 @@ impl<'a> Store<'a> for Certs<'a>
         Ok(matches)
     }
 
-    fn list<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
+    fn fingerprints<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
         Box::new(self.certs.keys().cloned())
     }
 
