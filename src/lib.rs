@@ -102,6 +102,7 @@ pub fn email_to_userid(email: &str) -> Result<UserID> {
 mod tests {
     use super::*;
 
+    use std::borrow::Cow;
     use std::str;
 
     use anyhow::Context;
@@ -111,10 +112,12 @@ mod tests {
     use openpgp::KeyID;
     use openpgp::Cert;
     use openpgp::parse::Parse;
+    use openpgp::policy::StandardPolicy;
     use openpgp::serialize::Serialize;
 
     use openpgp_cert_d as cert_d;
 
+    use store::Certs;
     use store::StoreError;
     use store::UserIDQueryParams;
 
@@ -834,4 +837,141 @@ mod tests {
 
         Ok(())
     }
+
+    // Make sure that when we update a certificate, we are able to
+    // find any new components and we are still able to find the old
+    // components.
+    fn test_store_update<'a, B>(mut backend: B) -> Result<()>
+        where B: store::StoreUpdate<'a>
+    {
+        let p = &StandardPolicy::new();
+
+        let signing_cert =
+            Cert::from_bytes(&keyring::halfling_signing.bytes())
+                .expect("valid");
+        let fpr = signing_cert.fingerprint();
+
+        // We expect a primary and two subkeys.
+        assert_eq!(signing_cert.keys().count(), 3);
+        let signing_vc = signing_cert.with_policy(p, None).expect("ok");
+        let signing_fpr = signing_vc.keys().subkeys()
+            .for_signing()
+            .map(|ka| ka.fingerprint())
+            .collect::<Vec<Fingerprint>>();
+        assert_eq!(signing_fpr.len(), 1);
+        let signing_fpr = KeyHandle::from(
+            signing_fpr.into_iter().next().expect("have one"));
+
+        let auth_fpr = signing_vc.keys().subkeys()
+            .for_authentication()
+            .map(|ka| ka.fingerprint())
+            .collect::<Vec<Fingerprint>>();
+        assert_eq!(auth_fpr.len(), 1);
+        let auth_fpr = KeyHandle::from(
+            auth_fpr.into_iter().next().expect("have one"));
+
+        let encryption_cert =
+            Cert::from_bytes(&keyring::halfling_encryption.bytes())
+                .expect("valid");
+        assert_eq!(fpr, encryption_cert.fingerprint());
+
+        // We expect a primary and two subkeys.
+        assert_eq!(encryption_cert.keys().count(), 3);
+        let encryption_vc = encryption_cert.with_policy(p, None).expect("ok");
+        let encryption_fpr = encryption_vc.keys().subkeys()
+            .for_transport_encryption()
+            .map(|ka| ka.fingerprint())
+            .collect::<Vec<Fingerprint>>();
+        assert_eq!(encryption_fpr.len(), 1);
+        let encryption_fpr = KeyHandle::from(
+            encryption_fpr.into_iter().next().expect("have one"));
+
+        assert_ne!(signing_fpr, encryption_fpr);
+
+        let auth2_fpr = encryption_vc.keys().subkeys()
+            .for_authentication()
+            .map(|ka| ka.fingerprint())
+            .collect::<Vec<Fingerprint>>();
+        assert_eq!(auth2_fpr.len(), 1);
+        let auth2_fpr = KeyHandle::from(
+            auth2_fpr.into_iter().next().expect("have one"));
+
+        assert_eq!(auth_fpr, auth2_fpr);
+
+        let merged_cert = signing_cert.clone()
+            .merge_public(encryption_cert.clone()).expect("ok");
+
+        let check = |backend: &B, have_enc: bool, cert: &Cert| {
+            let r = backend.by_cert(&KeyHandle::from(fpr.clone())).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r[0].to_cert().expect("ok"), cert);
+
+            let r = backend.by_key(&signing_fpr).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r[0].to_cert().expect("ok"), cert);
+
+            let r = backend.by_key(&auth_fpr).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r[0].to_cert().expect("ok"), cert);
+
+            if have_enc {
+                let r = backend.by_key(&encryption_fpr).unwrap();
+                assert_eq!(r.len(), 1);
+                assert_eq!(r[0].to_cert().expect("ok"), cert);
+            } else {
+                assert!(backend.by_key(&encryption_fpr).is_err());
+            }
+
+            let r = backend.by_userid(
+                &UserID::from("<regis@pup.com>")).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r[0].to_cert().expect("ok"), cert);
+
+            let r = backend.by_userid(
+                &UserID::from("Halfling <signing@halfling.org>")).unwrap();
+            assert_eq!(r.len(), 1);
+            assert_eq!(r[0].to_cert().expect("ok"), cert);
+
+            if have_enc {
+                let r = backend.by_userid(
+                    &UserID::from("Halfling <encryption@halfling.org>"))
+                    .unwrap();
+                assert_eq!(r.len(), 1);
+                assert_eq!(r[0].to_cert().expect("ok"), cert);
+            } else {
+                assert!(backend.by_key(&encryption_fpr).is_err());
+            }
+        };
+
+        // Insert the signing certificate.
+        backend.update(Cow::Owned(LazyCert::from(signing_cert.clone())))
+            .expect("ok");
+        check(&backend, false, &signing_cert);
+
+        backend.update(Cow::Owned(LazyCert::from(encryption_cert.clone())))
+            .expect("ok");
+        check(&backend, true, &merged_cert);
+
+        backend.update(Cow::Owned(LazyCert::from(signing_cert.clone())))
+            .expect("ok");
+        check(&backend, true, &merged_cert);
+
+        Ok(())
+    }
+
+    // Test StoreUpdate::update for CertDB.
+    #[test]
+    fn test_store_update_certdb() -> Result<()> {
+        let path = tempfile::tempdir()?;
+        let certdb = CertDB::open(&path).expect("exists");
+        test_store_update(certdb)
+    }
+
+    // Test StoreUpdate::update for Certs.
+    #[test]
+    fn test_store_update_certs() -> Result<()> {
+        let certs = Certs::empty();
+        test_store_update(certs)
+    }
 }
+

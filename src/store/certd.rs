@@ -124,31 +124,39 @@ impl<'a> CertD<'a> {
     {
         tracer!(TRACE, "CertD::index");
         let cert = cert.into();
-        t!("Inserting {} into the in-core caches", cert.fingerprint());
+        t!("Inserting {} into the in-core index", cert.fingerprint());
         let rccert = Rc::new(cert);
 
         // Check if the certificate is already present.  If so, we are
         // reupdating so avoid duplicates.
 
         let fpr = rccert.fingerprint();
-        let update = if let Some(_old)
-            = self.by_cert_fpr.insert(fpr.clone(), rccert.clone())
-        {
-            // This is an update.
-
-            // XXX: Remove any keys or user ids that were removed.
-
-            true
-        } else {
-            false
+        let update = match self.by_cert_fpr.entry(fpr.clone()) {
+            hash_map::Entry::Occupied(mut oe) => {
+                *oe.get_mut() = rccert.clone();
+                true
+            }
+            hash_map::Entry::Vacant(ve) => {
+                ve.insert(rccert.clone());
+                false
+            }
         };
 
         match self.by_cert_keyid.entry(KeyID::from(&fpr)) {
             hash_map::Entry::Occupied(mut oe) => {
                 let certs = oe.get_mut();
-                if ! update
-                    || ! certs.iter().any(|c| c.fingerprint() == fpr)
-                {
+                let mut set = false;
+                if update {
+                    for c in certs.iter_mut() {
+                        if c.fingerprint() == fpr {
+                            *c = rccert.clone();
+                            set = true;
+                            break;
+                        }
+                    }
+                }
+
+                if ! set {
                     certs.push(rccert.clone());
                 }
             }
@@ -158,14 +166,23 @@ impl<'a> CertD<'a> {
         }
 
         for subkey in rccert.subkeys() {
-            let fpr = subkey.fingerprint();
+            let subkey_fpr = subkey.fingerprint();
 
-            match self.by_subkey_fpr.entry(fpr.clone()) {
+            match self.by_subkey_fpr.entry(subkey_fpr.clone()) {
                 hash_map::Entry::Occupied(mut oe) => {
                     let certs = oe.get_mut();
-                    if ! update
-                        || ! certs.iter().any(|c| c.fingerprint() == fpr)
-                    {
+                    let mut set = false;
+                    if update {
+                        for c in certs.iter_mut() {
+                            if c.fingerprint() == fpr {
+                                *c = rccert.clone();
+                                set = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if ! set {
                         certs.push(rccert.clone());
                     }
                 }
@@ -174,12 +191,21 @@ impl<'a> CertD<'a> {
                 }
             }
 
-            match self.by_subkey_keyid.entry(KeyID::from(&fpr)) {
+            match self.by_subkey_keyid.entry(KeyID::from(&subkey_fpr)) {
                 hash_map::Entry::Occupied(mut oe) => {
                     let certs = oe.get_mut();
-                    if ! update
-                        || ! certs.iter().any(|c| c.fingerprint() == fpr)
-                    {
+                    let mut set = false;
+                    if update {
+                        for c in certs.iter_mut() {
+                            if c.fingerprint() == fpr {
+                                *c = rccert.clone();
+                                set = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if ! set {
                         certs.push(rccert.clone());
                     }
                 }
@@ -459,7 +485,12 @@ impl<'a> StoreUpdate<'a> for CertD<'a> {
             Ok(bytes)
         })?;
 
-        Ok(merged.expect("set"))
+        let merged = merged.expect("set");
+        self.index(None, merged.into_owned());
+        // Annoyingly, there is no easy way to get index to return a
+        // reference to what it just inserted.
+        Ok(Cow::Borrowed(
+            self.by_cert_fpr.get(&fpr).expect("just set").as_ref()))
     }
 }
 
