@@ -81,6 +81,16 @@ impl<'a> LazyCert<'a> {
         self.raw.borrow()
     }
 
+    /// Returns the RawCert, if any.
+    ///
+    /// If the cert has already been parsed, returns `Err(self)`.
+    pub fn into_raw_cert(self) -> std::result::Result<RawCert<'a>, Self> {
+        match self.raw.replace(None) {
+            Some(raw) => Ok(raw),
+            None => Err(self),
+        }
+    }
+
     /// Returns the certificate's fingerprint.
     pub fn fingerprint(&self) -> Fingerprint {
         if let Some(cert) = self.cert.get() {
