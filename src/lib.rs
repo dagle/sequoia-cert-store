@@ -109,9 +109,28 @@ mod tests {
     use openpgp::Fingerprint;
     use openpgp::KeyHandle;
     use openpgp::KeyID;
+    use openpgp::Cert;
+    use openpgp::parse::Parse;
+    use openpgp::serialize::Serialize;
+
+    use openpgp_cert_d as cert_d;
 
     use store::StoreError;
     use store::UserIDQueryParams;
+
+    fn certd_merge(new: cert_d::Data, disk: Option<cert_d::Data>)
+        -> cert_d::Result<cert_d::Data> {
+        if let Some(disk) = disk {
+            let new = Cert::from_bytes(&new).expect("valid");
+            let disk = Cert::from_bytes(&disk).expect("valid");
+            let merged = new.merge_public(disk).expect("valid");
+            let mut bytes = Vec::new();
+            merged.serialize(&mut bytes).expect("valid");
+            Ok(bytes.into_boxed_slice())
+        } else {
+            Ok(new)
+        }
+    }
 
     include!("../tests/keyring.rs");
 
@@ -667,7 +686,6 @@ mod tests {
     #[test]
     fn certd() -> Result<()> {
         use std::io::Read;
-        use openpgp_cert_d as cert_d;
 
         // We expect 8 certificates.
         assert_eq!(keyring::certs.len(), 10);
@@ -682,13 +700,6 @@ mod tests {
             })?;
 
         for cert in keyring::certs.iter() {
-            // certd.insert doesn't do a merge.  That's okay, just
-            // skip this certificate.
-            if cert.base == "alice2" {
-                // We prefer alice2-adopted-alice.
-                continue;
-            }
-
             let bytes = cert.bytes();
             let mut reader = openpgp::armor::Reader::from_bytes(
                 &bytes,
@@ -698,11 +709,7 @@ mod tests {
                 .expect(&format!("{}", cert.base));
 
             certd
-                .insert(bytes.into_boxed_slice(), |new, disk| {
-                    assert!(disk.is_none());
-
-                    Ok(new)
-                })
+                .insert(bytes.into_boxed_slice(), certd_merge)
                 .with_context(|| {
                     format!("{} ({})", cert.base, cert.fingerprint)
                 })
@@ -720,7 +727,6 @@ mod tests {
     #[test]
     fn certdb() -> Result<()> {
         use std::io::Read;
-        use openpgp_cert_d as cert_d;
 
         // Sanity check how many certificates we read.
         assert_eq!(keyring::certs.len(), 10);
@@ -735,13 +741,6 @@ mod tests {
             })?;
 
         for cert in keyring::certs.iter() {
-            // certd.insert doesn't do a merge.  That's okay, just
-            // skip this certificate.
-            if cert.base == "alice2" {
-                // We prefer alice2-adopted-alice.
-                continue;
-            }
-
             let bytes = cert.bytes();
             let mut reader = openpgp::armor::Reader::from_bytes(
                 &bytes,
@@ -751,11 +750,7 @@ mod tests {
                 .expect(&format!("{}", cert.base));
 
             certd
-                .insert(bytes.into_boxed_slice(), |new, disk| {
-                    assert!(disk.is_none());
-
-                    Ok(new)
-                })
+                .insert(bytes.into_boxed_slice(), certd_merge)
                 .with_context(|| {
                     format!("{} ({})", cert.base, cert.fingerprint)
                 })
@@ -772,7 +767,6 @@ mod tests {
     #[test]
     fn certdb_layered() -> Result<()> {
         use std::io::Read;
-        use openpgp_cert_d as cert_d;
 
         assert_eq!(keyring::certs.len(), 10);
 
@@ -800,11 +794,7 @@ mod tests {
                 .expect(&format!("{}", cert.base));
 
             certd
-                .insert(bytes.into_boxed_slice(), |new, disk| {
-                    assert!(disk.is_none());
-
-                    Ok(new)
-                })
+                .insert(bytes.into_boxed_slice(), certd_merge)
                 .with_context(|| {
                     format!("{} ({})", cert.base, cert.fingerprint)
                 })
