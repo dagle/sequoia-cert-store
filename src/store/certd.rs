@@ -327,8 +327,8 @@ impl<'a> CertD<'a> {
 }
 
 impl<'a> Store<'a> for CertD<'a> {
-    fn by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        tracer!(TRACE, "CertD::by_cert");
+    fn lookup_by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        tracer!(TRACE, "CertD::lookup_by_cert");
         t!("{}", kh);
 
         match kh {
@@ -349,11 +349,11 @@ impl<'a> Store<'a> for CertD<'a> {
         }
     }
 
-    fn by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        tracer!(TRACE, "CertD::by_cert");
+    fn lookup_by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        tracer!(TRACE, "CertD::lookup_by_key");
         t!("{}", kh);
 
-        let mut by_cert: Vec<Cow<LazyCert>> = self.by_cert(kh)
+        let mut by_cert: Vec<Cow<LazyCert>> = self.lookup_by_cert(kh)
             .or_else(|err| {
                 if let Some(StoreError::NotFound(_))
                     = err.downcast_ref::<StoreError>()
@@ -420,7 +420,7 @@ impl<'a> Store<'a> for CertD<'a> {
         let matches = matches
             .into_iter()
             .map(|fpr| {
-                self.by_cert_fpr(&fpr).expect("indexed")
+                self.lookup_by_cert_fpr(&fpr).expect("indexed")
             })
             .collect();
 
@@ -596,7 +596,7 @@ mod tests {
 
         // Test Store::by_cert.
         for cert in certs.iter() {
-            let certs_read = certd.by_cert(&cert.key_handle()).expect("present");
+            let certs_read = certd.lookup_by_cert(&cert.key_handle()).expect("present");
             // We expect exactly one cert.
             assert_eq!(certs_read.len(), 1);
             let cert_read = certs_read.into_iter().next().expect("have one")
@@ -606,7 +606,7 @@ mod tests {
 
         for subkey in subkeys_fpr.iter() {
             let kh = KeyHandle::from(subkey.clone());
-            match certd.by_cert(&kh) {
+            match certd.lookup_by_cert(&kh) {
                 Ok(certs) => panic!("Expected nothing, got {} certs", certs.len()),
                 Err(err) => {
                     if let Some(&StoreError::NotFound(ref got))
@@ -620,12 +620,12 @@ mod tests {
             }
         }
 
-        // Test Store::by_key.
+        // Test Store::lookup_by_key.
         for fpr in certs.iter().map(|cert| cert.fingerprint())
             .chain(subkeys_fpr.iter().cloned())
         {
             let certs_read
-                = certd.by_key(&KeyHandle::from(fpr.clone())).expect("present");
+                = certd.lookup_by_key(&KeyHandle::from(fpr.clone())).expect("present");
             // We expect exactly one cert.
             assert_eq!(certs_read.len(), 1);
             let cert_read = certs_read.into_iter().next().expect("have one")
@@ -634,12 +634,12 @@ mod tests {
             assert!(cert_read.keys().any(|k| k.fingerprint() == fpr));
         }
 
-        // Test Store::by_userid.
+        // Test Store::lookup_by_userid.
         for userid in userids.iter() {
             let userid = UserID::from(&userid[..]);
 
             let certs_read
-                = certd.by_userid(&userid).expect("present");
+                = certd.lookup_by_userid(&userid).expect("present");
             // We expect exactly one cert.
             assert_eq!(certs_read.len(), 1);
             let cert_read = certs_read.into_iter().next().expect("have one")

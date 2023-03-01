@@ -354,8 +354,10 @@ fn merge<'a, 'b>(mut certs: Vec<Cow<'b, LazyCert<'a>>>)
 }
 
 impl<'a> store::Store<'a> for CertDB<'a> {
-    fn by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        let certs = forward!(by_cert, self, kh, kh)?;
+    fn lookup_by_cert(&self, kh: &KeyHandle)
+        -> Result<Vec<Cow<LazyCert<'a>>>>
+    {
+        let certs = forward!(lookup_by_cert, self, kh, kh)?;
         if certs.is_empty() {
             Err(StoreError::NotFound(kh.clone()).into())
         } else {
@@ -363,9 +365,10 @@ impl<'a> store::Store<'a> for CertDB<'a> {
         }
     }
 
-    fn by_cert_fpr(&self, fingerprint: &Fingerprint) -> Result<Cow<LazyCert<'a>>>
+    fn lookup_by_cert_fpr(&self, fingerprint: &Fingerprint)
+        -> Result<Cow<LazyCert<'a>>>
     {
-        let certs = forward!(by_cert_fpr,
+        let certs = forward!(lookup_by_cert_fpr,
                              append:|c| vec![c],
                              self, fingerprint, fingerprint)?;
         // There may be multiple variants.  Merge them.
@@ -379,8 +382,10 @@ impl<'a> store::Store<'a> for CertDB<'a> {
         }
     }
 
-    fn by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        let certs = forward!(by_key, self, kh, kh)?;
+    fn lookup_by_key(&self, kh: &KeyHandle)
+        -> Result<Vec<Cow<LazyCert<'a>>>>
+    {
+        let certs = forward!(lookup_by_key, self, kh, kh)?;
         if certs.is_empty() {
             Err(StoreError::NotFound(kh.clone()).into())
         } else {
@@ -399,8 +404,10 @@ impl<'a> store::Store<'a> for CertDB<'a> {
         }
     }
 
-    fn by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        let certs = forward!(by_userid, self, userid, userid)?;
+    fn lookup_by_userid(&self, userid: &UserID)
+        -> Result<Vec<Cow<LazyCert<'a>>>>
+    {
+        let certs = forward!(lookup_by_userid, self, userid, userid)?;
         if certs.is_empty() {
             Err(StoreError::NoMatches(
                 String::from_utf8_lossy(userid.value()).to_string()).into())
@@ -418,8 +425,8 @@ impl<'a> store::Store<'a> for CertDB<'a> {
         }
     }
 
-    fn by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        let certs = forward!(by_email, self, email, email)?;
+    fn lookup_by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        let certs = forward!(lookup_by_email, self, email, email)?;
         if certs.is_empty() {
             Err(StoreError::NoMatches(email.to_string()).into())
         } else {
@@ -436,8 +443,10 @@ impl<'a> store::Store<'a> for CertDB<'a> {
         }
     }
 
-    fn by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        let certs = forward!(by_email_domain, self, domain, domain)?;
+    fn lookup_by_email_domain(&self, domain: &str)
+        -> Result<Vec<Cow<LazyCert<'a>>>>
+    {
+        let certs = forward!(lookup_by_email_domain, self, domain, domain)?;
         if certs.is_empty() {
             Err(StoreError::NoMatches(domain.to_string()).into())
         } else {

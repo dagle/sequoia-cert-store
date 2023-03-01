@@ -312,20 +312,20 @@ pub trait Store<'a> {
     ///
     /// The caller may assume that looking up a fingerprint returns at
     /// most one certificate.
-    fn by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>>;
+    fn lookup_by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>>;
 
     /// Returns the certificate with the specified fingerprint, if any.
     ///
     /// Returns [`StoreError::NotFound`] if the certificate is not found.
     ///
     /// The default implementation is implemented in terms of
-    /// [`Store::by_cert`].
-    fn by_cert_fpr(&self, fingerprint: &Fingerprint)
+    /// [`Store::lookup_by_cert`].
+    fn lookup_by_cert_fpr(&self, fingerprint: &Fingerprint)
         -> Result<Cow<LazyCert<'a>>>
     {
         let kh = KeyHandle::from(fingerprint.clone());
 
-        self.by_cert(&kh)
+        self.lookup_by_cert(&kh)
             .and_then(|v| {
                 assert!(v.len() <= 1);
                 v.into_iter().next()
@@ -341,7 +341,7 @@ pub trait Store<'a> {
     /// Note: even if you pass a fingerprint, this may return multiple
     /// certificates as the same subkey may be attached to multiple
     /// certificates.
-    fn by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>>;
+    fn lookup_by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>>;
 
     /// Returns certificates that have a User ID matching the
     /// specified pattern according to the query parameters.
@@ -351,7 +351,7 @@ pub trait Store<'a> {
     /// Performs an exact match on the User ID.
     ///
     /// The pattern is anchored, and the match is case sensitive.
-    fn by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
+    fn lookup_by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
         self.select_userid(
             &UserIDQueryParams::new()
                 .set_email(false)
@@ -381,7 +381,7 @@ pub trait Store<'a> {
     /// The pattern is interpreted as an email address.  It is first
     /// normalized, and then matched against the normalized email
     /// address, it is anchored, and the match is case sensitive.
-    fn by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+    fn lookup_by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
         let userid = crate::email_to_userid(&email)?;
         let email = userid.email_normalized()?.expect("have one");
 
@@ -421,7 +421,7 @@ pub trait Store<'a> {
     /// not start with an `@`.  This does not match subdomains.  That
     /// is, it will match `alice@foo.bar.com` when searching for
     /// `bar.com`.
-    fn by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+    fn lookup_by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
         let localpart = "localpart";
         let email = format!("{}@{}", localpart, domain);
         let userid = crate::email_to_userid(&email)?;
@@ -450,7 +450,7 @@ pub trait Store<'a> {
     /// Returns all of the certificates.
     ///
     /// The default implementation is implemented in terms of
-    /// [`Store::list`] and [`Store::by_cert_fpr`].  Many backends
+    /// [`Store::list`] and [`Store::lookup_by_cert_fpr`].  Many backends
     /// will be able to do this more efficiently.
     fn iter<'b>(&'b self)
         -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
@@ -458,7 +458,7 @@ pub trait Store<'a> {
     {
         Box::new(self.list()
             .filter_map(|fpr| {
-                self.by_cert_fpr(&fpr).ok()
+                self.lookup_by_cert_fpr(&fpr).ok()
             }))
     }
 
@@ -482,18 +482,18 @@ pub trait Store<'a> {
 impl<'a: 't, 't, T> Store<'a> for Box<T>
 where T: Store<'a> + ?Sized + 't
 {
-    fn by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        self.as_ref().by_cert(kh)
+    fn lookup_by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.as_ref().lookup_by_cert(kh)
     }
 
-    fn by_cert_fpr(&self, fingerprint: &Fingerprint)
+    fn lookup_by_cert_fpr(&self, fingerprint: &Fingerprint)
         -> Result<Cow<LazyCert<'a>>>
     {
-        self.as_ref().by_cert_fpr(fingerprint)
+        self.as_ref().lookup_by_cert_fpr(fingerprint)
     }
 
-    fn by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        self.as_ref().by_key(kh)
+    fn lookup_by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.as_ref().lookup_by_key(kh)
     }
 
     fn select_userid(&self, query: &UserIDQueryParams, pattern: &str)
@@ -502,24 +502,24 @@ where T: Store<'a> + ?Sized + 't
         self.as_ref().select_userid(query, pattern)
     }
 
-    fn by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        self.as_ref().by_userid(userid)
+    fn lookup_by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.as_ref().lookup_by_userid(userid)
     }
 
     fn grep_userid(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
         self.as_ref().grep_userid(pattern)
     }
 
-    fn by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        self.as_ref().by_email(email)
+    fn lookup_by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.as_ref().lookup_by_email(email)
     }
 
     fn grep_email(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
         self.as_ref().grep_email(pattern)
     }
 
-    fn by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        self.as_ref().by_email_domain(domain)
+    fn lookup_by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.as_ref().lookup_by_email_domain(domain)
     }
 
     fn list<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
@@ -541,18 +541,18 @@ where T: Store<'a> + ?Sized + 't
 impl<'a: 't, 't, T> Store<'a> for &'t T
 where T: Store<'a> + ?Sized
 {
-    fn by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        (*self).by_cert(kh)
+    fn lookup_by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (*self).lookup_by_cert(kh)
     }
 
-    fn by_cert_fpr(&self, fingerprint: &Fingerprint)
+    fn lookup_by_cert_fpr(&self, fingerprint: &Fingerprint)
         -> Result<Cow<LazyCert<'a>>>
     {
-        (*self).by_cert_fpr(fingerprint)
+        (*self).lookup_by_cert_fpr(fingerprint)
     }
 
-    fn by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        (*self).by_key(kh)
+    fn lookup_by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (*self).lookup_by_key(kh)
     }
 
     fn select_userid(&self, query: &UserIDQueryParams, pattern: &str)
@@ -561,24 +561,24 @@ where T: Store<'a> + ?Sized
         (*self).select_userid(query, pattern)
     }
 
-    fn by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        (*self).by_userid(userid)
+    fn lookup_by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (*self).lookup_by_userid(userid)
     }
 
     fn grep_userid(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
         (*self).grep_userid(pattern)
     }
 
-    fn by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        (*self).by_email(email)
+    fn lookup_by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (*self).lookup_by_email(email)
     }
 
     fn grep_email(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
         (*self).grep_email(pattern)
     }
 
-    fn by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        (*self).by_email_domain(domain)
+    fn lookup_by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (*self).lookup_by_email_domain(domain)
     }
 
     fn list<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
@@ -600,18 +600,18 @@ where T: Store<'a> + ?Sized
 impl<'a: 't, 't, T> Store<'a> for &'t mut T
 where T: Store<'a> + ?Sized
 {
-    fn by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        (**self).by_cert(kh)
+    fn lookup_by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (**self).lookup_by_cert(kh)
     }
 
-    fn by_cert_fpr(&self, fingerprint: &Fingerprint)
+    fn lookup_by_cert_fpr(&self, fingerprint: &Fingerprint)
         -> Result<Cow<LazyCert<'a>>>
     {
-        (**self).by_cert_fpr(fingerprint)
+        (**self).lookup_by_cert_fpr(fingerprint)
     }
 
-    fn by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        (**self).by_key(kh)
+    fn lookup_by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (**self).lookup_by_key(kh)
     }
 
     fn select_userid(&self, query: &UserIDQueryParams, pattern: &str)
@@ -620,24 +620,24 @@ where T: Store<'a> + ?Sized
         (**self).select_userid(query, pattern)
     }
 
-    fn by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        (**self).by_userid(userid)
+    fn lookup_by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (**self).lookup_by_userid(userid)
     }
 
     fn grep_userid(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
         (**self).grep_userid(pattern)
     }
 
-    fn by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        (**self).by_email(email)
+    fn lookup_by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (**self).lookup_by_email(email)
     }
 
     fn grep_email(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
         (**self).grep_email(pattern)
     }
 
-    fn by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        (**self).by_email_domain(domain)
+    fn lookup_by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        (**self).lookup_by_email_domain(domain)
     }
 
     fn list<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {

@@ -83,12 +83,12 @@ impl<'a> Certs<'a>
 
 impl<'a> Store<'a> for Certs<'a>
 {
-    fn by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        tracer!(TRACE, "Certs::by_cert");
+    fn lookup_by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        tracer!(TRACE, "Certs::lookup_by_cert");
 
         match kh {
             KeyHandle::Fingerprint(fpr) => {
-                self.by_cert_fpr(fpr).map(|c| vec![ c ])
+                self.lookup_by_cert_fpr(fpr).map(|c| vec![ c ])
             }
             KeyHandle::KeyID(keyid) => {
                 let certs: Vec<Cow<LazyCert>> = self.keys.get(&keyid)
@@ -113,8 +113,8 @@ impl<'a> Store<'a> for Certs<'a>
         }
     }
 
-    fn by_cert_fpr(&self, fingerprint: &Fingerprint) -> Result<Cow<LazyCert<'a>>> {
-        tracer!(TRACE, "Certs::by_cert_fpr");
+    fn lookup_by_cert_fpr(&self, fingerprint: &Fingerprint) -> Result<Cow<LazyCert<'a>>> {
+        tracer!(TRACE, "Certs::lookup_by_cert_fpr");
 
         if let Some(cert) = self.certs.get(fingerprint) {
             Ok(Cow::Borrowed(cert))
@@ -124,8 +124,8 @@ impl<'a> Store<'a> for Certs<'a>
         }
     }
 
-    fn by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        tracer!(TRACE, "Certs::by_key");
+    fn lookup_by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        tracer!(TRACE, "Certs::lookup_by_key");
 
         let keyid = KeyID::from(kh);
         let certs: Vec<Cow<LazyCert<'a>>> = self.keys.get(&keyid)
@@ -161,7 +161,7 @@ impl<'a> Store<'a> for Certs<'a>
         let matches = matches
             .into_iter()
             .map(|fpr| {
-                self.by_cert_fpr(&fpr).expect("indexed")
+                self.lookup_by_cert_fpr(&fpr).expect("indexed")
             })
             .collect();
 

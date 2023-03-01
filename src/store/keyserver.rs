@@ -134,8 +134,8 @@ impl<'a> KeyServer<'a> {
 }
 
 impl<'a> Store<'a> for KeyServer<'a> {
-    fn by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        let mut certs = self.by_key(kh)?;
+    fn lookup_by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        let mut certs = self.lookup_by_key(kh)?;
 
         // The match may be on a subkey.  Only return the certificates
         // whose primary key aliases kh.
@@ -150,8 +150,8 @@ impl<'a> Store<'a> for KeyServer<'a> {
         }
     }
 
-    fn by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        tracer!(TRACE, "KeyServer::by_key");
+    fn lookup_by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        tracer!(TRACE, "KeyServer::lookup_by_key");
 
         // Check the cache.
         if let Some(r) = self.check_cache(kh) {

@@ -178,7 +178,7 @@ mod tests {
             let keyid = KeyID::from(fpr.clone());
 
             // Check by_cert_fpr.
-            let got = backend.by_cert_fpr(&fpr).expect("present");
+            let got = backend.lookup_by_cert_fpr(&fpr).expect("present");
             assert_eq!(got.fingerprint(), fpr,
                        "{}, by_cert_fpr, primary", handle.base);
 
@@ -187,7 +187,7 @@ mod tests {
             // for the ed certificate), then we'll get a certificate
             // back.
             for sk in cert.keys().subkeys() {
-                match backend.by_cert_fpr(&sk.fingerprint()) {
+                match backend.lookup_by_cert_fpr(&sk.fingerprint()) {
                     Ok(got) => {
                         // The subkey could be a primary key for a
                         // different certificate.  So, make sure it is
@@ -197,7 +197,7 @@ mod tests {
                                 c.fingerprint.parse::<Fingerprint>().unwrap()
                                     == got.fingerprint()
                             }),
-                            "{}, by_cert_fpr, subkey, unexpectedly got {}",
+                            "{}, lookup_by_cert_fpr, subkey, unexpectedly got {}",
                             handle.base, got.fingerprint());
                     }
                     Err(err) => {
@@ -209,16 +209,16 @@ mod tests {
                 }
             }
 
-            // Check by_cert using key ids.
-            let got = backend.by_cert(&KeyHandle::from(&keyid))
+            // Check lookup_by_cert using key ids.
+            let got = backend.lookup_by_cert(&KeyHandle::from(&keyid))
                 .expect("present");
             assert!(got.into_iter().any(|c| c.fingerprint() == fpr),
-                    "{}, by_cert, keyid, primary", handle.base);
+                    "{}, lookup_by_cert, keyid, primary", handle.base);
 
             // Look up by subkey.  This will only return something if
             // the subkey also happens to be a primary key.
             for sk in cert.keys().subkeys() {
-                match backend.by_cert(&KeyHandle::from(sk.keyid())) {
+                match backend.lookup_by_cert(&KeyHandle::from(sk.keyid())) {
                     Ok(got) => {
                         // Make sure subkey is also a primary key.
                         for got in got.into_iter() {
@@ -228,7 +228,8 @@ mod tests {
                                         .unwrap()
                                         == got.fingerprint()
                                 }),
-                                "{}, by_cert_fpr, subkey, unexpectedly got {}",
+                                "{}, lookup_by_cert_fpr, subkey, \
+                                 unexpectedly got {}",
                                 handle.base, got.fingerprint());
                         }
                     }
@@ -241,33 +242,36 @@ mod tests {
                 }
             }
 
-            // Check by_key using fingerprints.
-            let got = backend.by_key(&KeyHandle::from(fpr.clone()))
+            // Check lookup_by_key using fingerprints.
+            let got = backend.lookup_by_key(&KeyHandle::from(fpr.clone()))
                 .expect("present");
             assert!(got.into_iter().any(|c| c.fingerprint() == fpr),
-                    "{}, by_key, with fingerprint, primary", handle.base);
+                    "{}, lookup_by_key, with fingerprint, primary",
+                    handle.base);
 
             // Look up by subkey and make sure we get cert.
             for sk in cert.keys().subkeys() {
-                let got = backend.by_key(&KeyHandle::from(sk.fingerprint()))
+                let got = backend.lookup_by_key(
+                    &KeyHandle::from(sk.fingerprint()))
                     .expect("present");
                 assert!(got.into_iter().any(|c| c.fingerprint() == fpr),
-                        "{}, by_key, with fingerprint, subkey", handle.base);
+                        "{}, lookup_by_key, with fingerprint, subkey",
+                        handle.base);
             }
 
 
-            // Check by_key using keyids.
-            let got = backend.by_key(&KeyHandle::from(keyid.clone()))
+            // Check lookup_by_key using keyids.
+            let got = backend.lookup_by_key(&KeyHandle::from(keyid.clone()))
                 .expect("present");
             assert!(got.into_iter().any(|c| c.fingerprint() == fpr),
-                    "{}, by_key, with keyid, primary", handle.base);
+                    "{}, lookup_by_key, with keyid, primary", handle.base);
 
             // Look up by subkey and make sure we get cert.
             for sk in cert.keys().subkeys() {
-                let got = backend.by_key(&KeyHandle::from(sk.keyid()))
+                let got = backend.lookup_by_key(&KeyHandle::from(sk.keyid()))
                     .expect("present");
                 assert!(got.into_iter().any(|c| c.fingerprint() == fpr),
-                        "{}, by_key, with keyid, subkey", handle.base);
+                        "{}, lookup_by_key, with keyid, subkey", handle.base);
             }
 
 
@@ -277,14 +281,14 @@ mod tests {
                 let userid = ua.userid();
 
                 // Search by exact user id.
-                let got = backend.by_userid(userid)
-                    .expect(&format!("{}, by_userid({:?})",
+                let got = backend.lookup_by_userid(userid)
+                    .expect(&format!("{}, lookup_by_userid({:?})",
                                      handle.base, userid));
                 assert!(
                     got.into_iter().any(|c| {
                         c.userids().any(|u| &u == userid)
                     }),
-                    "{}, by_userid({:?})", handle.base, userid);
+                    "{}, lookup_by_userid({:?})", handle.base, userid);
 
                 // Extract an interior substring (nor anchored at the
                 // start or the end), and uppercase it.
@@ -351,24 +355,24 @@ mod tests {
                     continue;
                 };
 
-                // Search with the User ID using by_email.  This will
+                // Search with the User ID using lookup_by_email.  This will
                 // fail: a User ID that contains an email address is
                 // never a valid email address.
                 assert!(
-                    backend.by_email(
+                    backend.lookup_by_email(
                         str::from_utf8(userid.value()).expect("valid utf-8"))
                         .is_err(),
-                    "{}, by_email({:?})", handle.base, userid);
+                    "{}, lookup_by_email({:?})", handle.base, userid);
 
                 // Search by email.
-                let got = backend.by_email(&email)
-                    .expect(&format!("{}, by_email({:?})",
+                let got = backend.lookup_by_email(&email)
+                    .expect(&format!("{}, lookup_by_email({:?})",
                                      handle.base, email));
                 assert!(
                     got.into_iter().any(|c| {
                         c.userids().any(|u| &u == userid)
                     }),
-                    "{}, by_email({:?})", handle.base, userid);
+                    "{}, lookup_by_email({:?})", handle.base, userid);
 
                 // Extract an interior substring (nor anchored at the
                 // start or the end), and uppercase it.
@@ -431,56 +435,56 @@ mod tests {
                 // Search by domain.
                 let domain = email.rsplit('@').next().expect("have an @");
 
-                // Search with the User ID using by_email_domain.
+                // Search with the User ID using lookup_by_email_domain.
                 // This will fail: a User ID that contains an email
                 // address is never a valid email address.
                 assert!(
-                    backend.by_email_domain(
+                    backend.lookup_by_email_domain(
                         str::from_utf8(userid.value()).expect("valid utf-8"))
                         .is_err(),
-                    "{}, by_email_domain({:?})", handle.base, userid);
+                    "{}, lookup_by_email_domain({:?})", handle.base, userid);
                 // Likewise with the email address.
                 assert!(
-                    backend.by_email_domain(&email).is_err(),
-                    "{}, by_email_domain({:?})", handle.base, email);
+                    backend.lookup_by_email_domain(&email).is_err(),
+                    "{}, lookup_by_email_domain({:?})", handle.base, email);
 
                 // Search by domain.  We should find it.
-                let got = backend.by_email_domain(&domain)
-                    .expect(&format!("{}, by_email_domain({:?})",
+                let got = backend.lookup_by_email_domain(&domain)
+                    .expect(&format!("{}, lookup_by_email_domain({:?})",
                                      handle.base, domain));
                 assert!(
                     got.into_iter().any(|c| {
                         c.userids().any(|u| &u == userid)
                     }),
-                    "{}, by_email_domain({:?})", handle.base, userid);
+                    "{}, lookup_by_email_domain({:?})", handle.base, userid);
 
                 // Uppercase it.  We should still find it.
                 let pattern = domain.to_uppercase();
-                let got = backend.by_email_domain(&pattern)
-                    .expect(&format!("{}, by_email_domain({:?})",
+                let got = backend.lookup_by_email_domain(&pattern)
+                    .expect(&format!("{}, lookup_by_email_domain({:?})",
                                      handle.base, pattern));
                 assert!(
                     got.into_iter().any(|c| {
                         c.userids().any(|u| &u == userid)
                     }),
-                    "{}, by_email_domain({:?})", handle.base, pattern);
+                    "{}, lookup_by_email_domain({:?})", handle.base, pattern);
 
                 // Extract an substring.  That we shouldn't find.
                 let pattern = &domain[1..pattern.len() - 1];
-                let result = backend.by_email_domain(pattern);
+                let result = backend.lookup_by_email_domain(pattern);
                 match result {
                     Ok(got) => {
                         assert!(
                             got.into_iter().all(|c| {
                                 c.fingerprint() != fpr
                             }),
-                            "{}, by_email_domain({:?}, unexpectedly got {}",
+                            "{}, lookup_by_email_domain({:?}, unexpectedly got {}",
                             handle.base, pattern, fpr);
                     }
                     Err(err) => {
                         match err.downcast_ref::<StoreError>() {
                             Some(StoreError::NoMatches(_)) => (),
-                            _ => panic!("{}, by_email_domain({:?}) -> {}",
+                            _ => panic!("{}, lookup_by_email_domain({:?}) -> {}",
                                         handle.base, pattern, err),
                         }
                     }
@@ -499,7 +503,7 @@ mod tests {
 
         // alice and alice2 share a subkey.
         assert_eq!(
-            sort_vec(backend.by_key(
+            sort_vec(backend.lookup_by_key(
                 &"5989D7BE9908AE24799DF6CFBE678043781349F1"
                     .parse::<KeyHandle>().expect("valid"))
                 .expect("present")
@@ -517,7 +521,7 @@ mod tests {
 
         // ed's primary is also a subkey on the same certificate.
         assert_eq!(
-            sort_vec(backend.by_key(
+            sort_vec(backend.lookup_by_key(
                 &"0C346B2B6241263F64E9C7CF1EA300797258A74E"
                     .parse::<KeyHandle>().expect("valid"))
                 .expect("present")
@@ -536,7 +540,7 @@ mod tests {
         // but the backend is not supposed to check that.  (That
         // subkey is bound to carol.)
         assert_eq!(
-            sort_vec(backend.by_key(
+            sort_vec(backend.lookup_by_key(
                 &"CD22D4BD99FF10FDA11A83D4213DCB92C95346CE"
                     .parse::<KeyHandle>().expect("valid"))
                 .expect("present")
@@ -553,25 +557,25 @@ mod tests {
 
 
         // Try a key that is not present.
-        match backend.by_cert_fpr(
+        match backend.lookup_by_cert_fpr(
             &"0123 4567 89AB CDEF 0123 4567 89AB CDEF"
                 .parse::<Fingerprint>().expect("valid"))
         {
-            Ok(cert) => panic!("by_cert_fpr(not present) -> {}",
+            Ok(cert) => panic!("lookup_by_cert_fpr(not present) -> {}",
                                cert.fingerprint()),
             Err(err) => {
                 match err.downcast_ref::<StoreError>() {
                     Some(StoreError::NotFound(_)) => (),
-                    _ => panic!("by_cert(not present) -> {}", err),
+                    _ => panic!("lookup_by_cert(not present) -> {}", err),
                 }
             }
         }
 
-        match backend.by_key(
+        match backend.lookup_by_key(
             &"0123 4567 89AB CDEF 0123 4567 89AB CDEF"
                 .parse::<KeyHandle>().expect("valid"))
         {
-            Ok(certs) => panic!("by_key(not present) -> {}",
+            Ok(certs) => panic!("lookup_by_key(not present) -> {}",
                                 certs
                                     .into_iter()
                                     .map(|c| c.fingerprint().to_string())
@@ -580,13 +584,13 @@ mod tests {
             Err(err) => {
                 match err.downcast_ref::<StoreError>() {
                     Some(StoreError::NotFound(_)) => (),
-                    _ => panic!("by_cert(not present) -> {}", err),
+                    _ => panic!("lookup_by_cert(not present) -> {}", err),
                 }
             }
         }
 
         assert!(
-            backend.by_key(
+            backend.lookup_by_key(
                 &"0123 4567 89AB CDEF 0123 4567 89AB CDEF"
                     .parse::<KeyHandle>().expect("valid"))
                 .is_err());
@@ -595,13 +599,13 @@ mod tests {
 
         // Look up the User ID using puny code.
         assert_eq!(
-            backend.by_email("hans@xn--bcher-kva.tld")
+            backend.lookup_by_email("hans@xn--bcher-kva.tld")
                 .expect("present")
                 .len(),
             1);
         // And without puny code.
         assert_eq!(
-            backend.by_email("hans@bücher.tld")
+            backend.lookup_by_email("hans@bücher.tld")
                 .expect("present")
                 .into_iter()
                 .map(|c| c.fingerprint())
@@ -610,14 +614,14 @@ mod tests {
                   .parse::<Fingerprint>().expect("valid") ]);
         // A substring shouldn't match.
         assert_eq!(
-            backend.by_email("hans@bücher.tl")
+            backend.lookup_by_email("hans@bücher.tl")
                 .unwrap_or(Vec::new())
                 .len(),
             0);
 
         // The same, but just look up by domain.
         assert_eq!(
-            backend.by_email_domain("xn--bcher-kva.tld")
+            backend.lookup_by_email_domain("xn--bcher-kva.tld")
                 .expect("present")
                 .into_iter()
                 .map(|c| c.fingerprint())
@@ -626,7 +630,7 @@ mod tests {
                   .parse::<Fingerprint>().expect("valid") ]);
         // And without puny code.
         assert_eq!(
-            backend.by_email_domain("bücher.tld")
+            backend.lookup_by_email_domain("bücher.tld")
                 .expect("present")
                 .into_iter()
                 .map(|c| c.fingerprint())
@@ -638,7 +642,7 @@ mod tests {
         // Check that when looking up a subdomain, we don't get back
         // User IDs in a subdomain.
         assert_eq!(
-            backend.by_email_domain("company.com")
+            backend.lookup_by_email_domain("company.com")
                 .expect("present")
                 .into_iter()
                 .map(|c| c.fingerprint())
@@ -646,7 +650,7 @@ mod tests {
             vec![ keyring::una.fingerprint
                   .parse::<Fingerprint>().expect("valid") ]);
         assert_eq!(
-            backend.by_email_domain("sub.company.com")
+            backend.lookup_by_email_domain("sub.company.com")
                 .expect("present")
                 .into_iter()
                 .map(|c| c.fingerprint())
@@ -657,7 +661,7 @@ mod tests {
 
         // Check searching by domain.
         assert_eq!(
-            sort_vec(backend.by_email_domain("verein.de")
+            sort_vec(backend.lookup_by_email_domain("verein.de")
                 .expect("present")
                 .into_iter()
                 .map(|c| c.fingerprint())
@@ -672,7 +676,7 @@ mod tests {
 
         // It should be case insenitive.
         assert_eq!(
-            sort_vec(backend.by_email_domain("VEREIN.DE")
+            sort_vec(backend.lookup_by_email_domain("VEREIN.DE")
                 .expect("present")
                 .into_iter()
                 .map(|c| c.fingerprint())
@@ -902,44 +906,44 @@ mod tests {
             .merge_public(encryption_cert.clone()).expect("ok");
 
         let check = |backend: &B, have_enc: bool, cert: &Cert| {
-            let r = backend.by_cert(&KeyHandle::from(fpr.clone())).unwrap();
+            let r = backend.lookup_by_cert(&KeyHandle::from(fpr.clone())).unwrap();
             assert_eq!(r.len(), 1);
             assert_eq!(r[0].to_cert().expect("ok"), cert);
 
-            let r = backend.by_key(&signing_fpr).unwrap();
+            let r = backend.lookup_by_key(&signing_fpr).unwrap();
             assert_eq!(r.len(), 1);
             assert_eq!(r[0].to_cert().expect("ok"), cert);
 
-            let r = backend.by_key(&auth_fpr).unwrap();
+            let r = backend.lookup_by_key(&auth_fpr).unwrap();
             assert_eq!(r.len(), 1);
             assert_eq!(r[0].to_cert().expect("ok"), cert);
 
             if have_enc {
-                let r = backend.by_key(&encryption_fpr).unwrap();
+                let r = backend.lookup_by_key(&encryption_fpr).unwrap();
                 assert_eq!(r.len(), 1);
                 assert_eq!(r[0].to_cert().expect("ok"), cert);
             } else {
-                assert!(backend.by_key(&encryption_fpr).is_err());
+                assert!(backend.lookup_by_key(&encryption_fpr).is_err());
             }
 
-            let r = backend.by_userid(
+            let r = backend.lookup_by_userid(
                 &UserID::from("<regis@pup.com>")).unwrap();
             assert_eq!(r.len(), 1);
             assert_eq!(r[0].to_cert().expect("ok"), cert);
 
-            let r = backend.by_userid(
+            let r = backend.lookup_by_userid(
                 &UserID::from("Halfling <signing@halfling.org>")).unwrap();
             assert_eq!(r.len(), 1);
             assert_eq!(r[0].to_cert().expect("ok"), cert);
 
             if have_enc {
-                let r = backend.by_userid(
+                let r = backend.lookup_by_userid(
                     &UserID::from("Halfling <encryption@halfling.org>"))
                     .unwrap();
                 assert_eq!(r.len(), 1);
                 assert_eq!(r[0].to_cert().expect("ok"), cert);
             } else {
-                assert!(backend.by_key(&encryption_fpr).is_err());
+                assert!(backend.lookup_by_key(&encryption_fpr).is_err());
             }
         };
 
