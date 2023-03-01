@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -10,6 +9,7 @@ use openpgp::packet::UserID;
 
 use crate::LazyCert;
 use crate::store;
+use crate::store::MergeCerts;
 use store::StoreError;
 use store::UserIDQueryParams;
 
@@ -513,23 +513,18 @@ impl<'a> store::Store<'a> for CertDB<'a> {
 
 impl<'a> store::StoreUpdate<'a> for CertDB<'a> {
     fn update_by<'ra>(&'ra mut self, cert: Cow<'ra, LazyCert<'a>>,
-                      cookie: Option<&mut dyn Any>,
-                      merge_strategy:
-                      for <'b, 'rb, 'c> fn(Cow<'ra, LazyCert<'a>>,
-                                           Option<Cow<'rb, LazyCert<'b>>>,
-                                           Option<&'c mut dyn Any>)
-                                           -> Result<Cow<'ra, LazyCert<'a>>>)
+                      merge_strategy: &mut dyn MergeCerts<'a, 'ra>)
         -> Result<Cow<'ra, LazyCert<'a>>>
     {
         tracer!(TRACE, "CertDB::update_by");
         match self.certd.as_mut() {
             Ok(certd) => {
                 t!("Forwarding to underlying certd");
-                certd.update_by(cert, cookie, merge_strategy)
+                certd.update_by(cert, merge_strategy)
             }
             Err(in_memory) => {
                 t!("Forwarding to underlying in-memory DB");
-                in_memory.update_by(cert, cookie, merge_strategy)
+                in_memory.update_by(cert, merge_strategy)
             }
         }
     }

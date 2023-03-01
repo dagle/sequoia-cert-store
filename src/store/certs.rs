@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -14,6 +13,7 @@ use openpgp::parse::Parse;
 use openpgp::Result;
 
 use crate::LazyCert;
+use crate::store::MergeCerts;
 use crate::store::Store;
 use crate::store::StoreError;
 use crate::store::StoreUpdate;
@@ -267,12 +267,7 @@ impl<'a> Store<'a> for Certs<'a>
 
 impl<'a> StoreUpdate<'a> for Certs<'a> {
     fn update_by<'ra>(&'ra mut self, cert: Cow<'ra, LazyCert<'a>>,
-                      cookie: Option<&mut dyn Any>,
-                      merge_strategy:
-                      for <'b, 'rb, 'c> fn(Cow<'ra, LazyCert<'a>>,
-                                           Option<Cow<'rb, LazyCert<'b>>>,
-                                           Option<&'c mut dyn Any>)
-                                           -> Result<Cow<'ra, LazyCert<'a>>>)
+                      merge_strategy: &mut dyn MergeCerts<'a, 'ra>)
         -> Result<Cow<'ra, LazyCert<'a>>>
     {
         tracer!(TRACE, "Certs::update_by");
@@ -287,7 +282,7 @@ impl<'a> StoreUpdate<'a> for Certs<'a> {
 
                 let old = Cow::Borrowed(oe.get());
 
-                merged = merge_strategy(cert, Some(old), cookie)
+                merged = merge_strategy.merge(cert, Some(old))
                     .with_context(|| {
                         format!("Merging two version of {}", fpr)
                     })?;
@@ -297,7 +292,7 @@ impl<'a> StoreUpdate<'a> for Certs<'a> {
             Entry::Vacant(ve) => {
                 t!("Inserting {}", fpr);
 
-                merged = merge_strategy(cert, None, cookie)?;
+                merged = merge_strategy.merge(cert, None)?;
                 ve.insert(merged.to_owned().into_owned());
             }
         }

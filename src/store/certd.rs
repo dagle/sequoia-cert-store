@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map;
@@ -25,6 +24,7 @@ use openpgp_cert_d as cert_d;
 
 use crate::LazyCert;
 use crate::print_error_chain;
+use crate::store::MergeCerts;
 use crate::store::Store;
 use crate::store::StoreError;
 use crate::store::StoreUpdate;
@@ -433,12 +433,7 @@ impl<'a> Store<'a> for CertD<'a> {
 
 impl<'a> StoreUpdate<'a> for CertD<'a> {
     fn update_by<'ra>(&'ra mut self, cert: Cow<'ra, LazyCert<'a>>,
-                      cookie: Option<&mut dyn Any>,
-                      merge_strategy:
-                      for <'b, 'rb, 'c> fn(Cow<'ra, LazyCert<'a>>,
-                                           Option<Cow<'rb, LazyCert<'b>>>,
-                                           Option<&'c mut dyn Any>)
-                                           -> Result<Cow<'ra, LazyCert<'a>>>)
+                      merge_strategy: &mut dyn MergeCerts<'a, 'ra>)
         -> Result<Cow<'ra, LazyCert<'a>>>
     {
         tracer!(TRACE, "CertD::update_by");
@@ -488,7 +483,7 @@ impl<'a> StoreUpdate<'a> for CertD<'a> {
                 None
             };
 
-            let merged_ = merge_strategy(cert, disk, cookie)
+            let merged_ = merge_strategy.merge(cert, disk)
                 .with_context(|| {
                     format!("Merging versions of {}", fpr)
                 })
