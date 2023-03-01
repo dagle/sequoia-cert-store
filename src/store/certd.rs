@@ -401,7 +401,7 @@ impl<'a> Store<'a> for CertD<'a> {
         Box::new(self.by_cert_fpr.keys().cloned())
     }
 
-    fn iter<'b>(&'b self) -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
+    fn certs<'b>(&'b self) -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
         where 'a: 'b
     {
         Box::new(self.by_cert_fpr
@@ -584,7 +584,7 @@ mod tests {
 
         // Test Store::iter.  In particular, make sure we get
         // everything back.
-        let mut certs_read = certd.iter().collect::<Vec<_>>();
+        let mut certs_read = certd.certs().collect::<Vec<_>>();
         assert_eq!(
             certs_read.len(), certs.len(),
             "Looks like you're exhausting the available file descriptors");

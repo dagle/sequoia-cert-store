@@ -476,14 +476,14 @@ impl<'a> store::Store<'a> for CertDB<'a> {
         Box::new(certs.into_iter())
     }
 
-    fn iter<'b>(&'b self) -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
+    fn certs<'b>(&'b self) -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
         where 'a: 'b
     {
         let mut certs = Vec::new();
 
         match self.certd {
-            Ok(ref certd) => certs.extend(certd.iter()),
-            Err(ref in_memory) => certs.extend(in_memory.iter()),
+            Ok(ref certd) => certs.extend(certd.certs()),
+            Err(ref in_memory) => certs.extend(in_memory.certs()),
         };
 
         for (backend, mode) in self.backends.iter() {
@@ -491,7 +491,7 @@ impl<'a> store::Store<'a> for CertDB<'a> {
                 continue;
             }
 
-            certs.extend(backend.iter());
+            certs.extend(backend.certs());
         }
 
         let certs = merge(certs);

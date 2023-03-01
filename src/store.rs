@@ -452,7 +452,7 @@ pub trait Store<'a> {
     /// The default implementation is implemented in terms of
     /// [`Store::list`] and [`Store::lookup_by_cert_fpr`].  Many backends
     /// will be able to do this more efficiently.
-    fn iter<'b>(&'b self)
+    fn certs<'b>(&'b self)
         -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
         where 'a: 'b
     {
@@ -526,11 +526,11 @@ where T: Store<'a> + ?Sized + 't
         self.as_ref().list()
     }
 
-    fn iter<'b>(&'b self)
+    fn certs<'b>(&'b self)
         -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
         where 'a: 'b
     {
-        self.as_ref().iter()
+        self.as_ref().certs()
     }
 
     fn prefetch(&self) {
@@ -585,11 +585,11 @@ where T: Store<'a> + ?Sized
         (*self).list()
     }
 
-    fn iter<'b>(&'b self)
+    fn certs<'b>(&'b self)
         -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
         where 'a: 'b
     {
-        (*self).iter()
+        (*self).certs()
     }
 
     fn prefetch(&self) {
@@ -644,11 +644,11 @@ where T: Store<'a> + ?Sized
         (**self).list()
     }
 
-    fn iter<'b>(&'b self)
+    fn certs<'b>(&'b self)
         -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
         where 'a: 'b
     {
-        (**self).iter()
+        (**self).certs()
     }
 
     fn prefetch(&self) {
@@ -917,7 +917,7 @@ mod tests {
             }
 
             fn count(&self) -> usize {
-                self.backend.iter().count()
+                self.backend.certs().count()
             }
         }
 
@@ -954,7 +954,7 @@ mod tests {
             }
 
             fn count(&self) -> usize {
-                self.backend.iter().count()
+                self.backend.certs().count()
             }
         }
 

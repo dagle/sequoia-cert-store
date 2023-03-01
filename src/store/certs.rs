@@ -172,7 +172,8 @@ impl<'a> Store<'a> for Certs<'a>
         Box::new(self.certs.keys().cloned())
     }
 
-    fn iter<'b>(&'b self) -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b> where 'a: 'b
+    fn certs<'b>(&'b self) -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
+        where 'a: 'b
     {
         Box::new(self.certs
             .values()
