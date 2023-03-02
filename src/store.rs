@@ -611,40 +611,6 @@ where T: Store<'a> + ?Sized
     }
 }
 
-/// Merges two certificates.
-///
-/// This is primarily useful as the `merge_strategy` callback to
-/// [`StoreUpdate::update_by`].
-pub trait MergeCerts<'a: 'ra, 'ra> {
-    /// Merges two certificates.
-    ///
-    /// This is primarily useful as the `merge_strategy` callback to
-    /// [`StoreUpdate::update_by`].
-    ///
-    /// The default implementation merges the two certificates using
-    /// [`Cert::merge_public`].  When a variant of a packet is present
-    /// in the on-disk version and the new version, the variant in the
-    /// new version is preferred.  This can be the case with signature
-    /// packets, for instance, when the unhashed subpacket areas
-    /// differ, but the signatures are otherwise the same.
-    fn merge<'b, 'rb>(&mut self,
-                      new: Cow<'ra, LazyCert<'a>>,
-                      disk: Option<Cow<'rb, LazyCert<'b>>>)
-                      -> Result<Cow<'ra, LazyCert<'a>>>
-    {
-        if let Some(disk) = disk {
-            let merged = new.into_owned().into_cert()?
-                .merge_public(disk.as_cert()?)?;
-            Ok(Cow::Owned(LazyCert::from(merged)))
-        } else {
-            Ok(new)
-        }
-    }
-}
-
-impl<'a: 'ra, 'ra> MergeCerts<'a, 'ra> for () {
-}
-
 impl<'a: 't, 't, T> Store<'a> for &'t mut T
 where T: Store<'a> + ?Sized
 {
@@ -706,6 +672,40 @@ where T: Store<'a> + ?Sized
     fn prefetch_some(&mut self, certs: Vec<KeyHandle>) {
         (**self).prefetch_some(certs)
     }
+}
+
+/// Merges two certificates.
+///
+/// This is primarily useful as the `merge_strategy` callback to
+/// [`StoreUpdate::update_by`].
+pub trait MergeCerts<'a: 'ra, 'ra> {
+    /// Merges two certificates.
+    ///
+    /// This is primarily useful as the `merge_strategy` callback to
+    /// [`StoreUpdate::update_by`].
+    ///
+    /// The default implementation merges the two certificates using
+    /// [`Cert::merge_public`].  When a variant of a packet is present
+    /// in the on-disk version and the new version, the variant in the
+    /// new version is preferred.  This can be the case with signature
+    /// packets, for instance, when the unhashed subpacket areas
+    /// differ, but the signatures are otherwise the same.
+    fn merge<'b, 'rb>(&mut self,
+                      new: Cow<'ra, LazyCert<'a>>,
+                      disk: Option<Cow<'rb, LazyCert<'b>>>)
+                      -> Result<Cow<'ra, LazyCert<'a>>>
+    {
+        if let Some(disk) = disk {
+            let merged = new.into_owned().into_cert()?
+                .merge_public(disk.as_cert()?)?;
+            Ok(Cow::Owned(LazyCert::from(merged)))
+        } else {
+            Ok(new)
+        }
+    }
+}
+
+impl<'a: 'ra, 'ra> MergeCerts<'a, 'ra> for () {
 }
 
 /// Provides an interface to update a backing store.
