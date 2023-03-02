@@ -7,7 +7,7 @@
 //!
 //! [`UserIDIndex`]: store::UserIDIndex
 //!
-//! The [`CertDB`] data structure combines multiple certificate
+//! The [`CertStore`] data structure combines multiple certificate
 //! backends in a transparent way to users.
 use std::str;
 
@@ -21,9 +21,9 @@ use openpgp::packet::UserID;
 pub mod store;
 pub use store::Store;
 pub use store::StoreUpdate;
-mod cert_db;
-pub use cert_db::CertDB;
-pub use cert_db::AccessMode;
+mod cert_store;
+pub use cert_store::CertStore;
+pub use cert_store::AccessMode;
 
 mod lazy_cert;
 pub use lazy_cert::LazyCert;
@@ -765,7 +765,7 @@ mod tests {
         }
         drop (certd);
 
-        let certdb = CertDB::open(&path).expect("exists");
+        let certdb = CertStore::open(&path).expect("exists");
         test_backend(certdb);
 
         Ok(())
@@ -780,7 +780,7 @@ mod tests {
         // A certd for each certificate.
         let mut paths: Vec<tempfile::TempDir> = Vec::new();
 
-        let mut certdb = CertDB::empty();
+        let mut certdb = CertStore::empty();
 
         for cert in keyring::certs.iter() {
             let path = tempfile::tempdir()?;
@@ -963,11 +963,11 @@ mod tests {
         Ok(())
     }
 
-    // Test StoreUpdate::update for CertDB.
+    // Test StoreUpdate::update for CertStore.
     #[test]
     fn test_store_update_certdb() -> Result<()> {
         let path = tempfile::tempdir()?;
-        let certdb = CertDB::open(&path).expect("exists");
+        let certdb = CertStore::open(&path).expect("exists");
         test_store_update(certdb)
     }
 

@@ -1,11 +1,11 @@
 [package]
-name = "sequoia-cert-db"
+name = "sequoia-cert-store"
 description = "A certificate database interface."
 version = "0.1.0"
 authors = ["Neal H. Walfield <neal@pep.foundation>",
         "Justus Winter <justus@sequoia-pgp.org>"]
 homepage = "https://sequoia-pgp.org/"
-repository = "https://gitlab.com/sequoia-pgp/sequoia-cert-db"
+repository = "https://gitlab.com/sequoia-pgp/sequoia-cert-store"
 readme = "README.md"
 keywords = ["cryptography", "openpgp", "keyring", "database"]
 categories = ["cryptography", "authentication", "email",
@@ -38,7 +38,7 @@ tokio = { version = "1.13", features = [ "rt" ] }
 tempfile = "3"
 
 [lib]
-name = "sequoia_cert_db"
+name = "sequoia_cert_store"
 path = "src/lib.rs"
 
 [target.'cfg(not(windows))'.dev-dependencies]

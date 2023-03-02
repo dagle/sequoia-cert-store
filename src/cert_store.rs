@@ -37,7 +37,7 @@ pub enum AccessMode {
 /// [`StoreError::NotFound`].
 ///
 /// Results from the key server are either cached
-pub struct CertDB<'a> {
+pub struct CertStore<'a> {
     certd: std::result::Result<store::CertD<'a>, store::Certs<'a>>,
 
     // Read-only backends.
@@ -46,33 +46,33 @@ pub struct CertDB<'a> {
     keyserver: Option<store::KeyServer<'a>>,
 }
 
-impl<'a> CertDB<'a> {
-    /// Returns a CertDB, which does not have any configured backends.
+impl<'a> CertStore<'a> {
+    /// Returns a CertStore, which does not have any configured backends.
     pub fn empty() -> Self {
-        CertDB {
+        CertStore {
             certd: Err(store::Certs::empty()),
             backends: Vec::new(),
             keyserver: None,
         }
     }
 
-    /// Returns a CertDB, which uses the default certificate
+    /// Returns a CertStore, which uses the default certificate
     /// directory.
     ///
     /// When a certificate is added or updated, it will be added to or
     /// updated in this certificate store.
     pub fn new() -> Result<Self> {
-        Ok(CertDB {
+        Ok(CertStore {
             certd: Ok(store::CertD::open_default()?),
             backends: Vec::new(),
             keyserver: None,
         })
     }
 
-    /// Returns a CertDB, which uses the default certificate
+    /// Returns a CertStore, which uses the default certificate
     /// directory in read-only mode.
     pub fn readonly() -> Result<Self> {
-        let mut certdb = CertDB {
+        let mut certdb = CertStore {
             certd: Err(store::Certs::empty()),
             backends: Vec::new(),
             keyserver: None,
@@ -81,7 +81,7 @@ impl<'a> CertDB<'a> {
         Ok(certdb)
     }
 
-    /// Returns a CertDB, which uses the specified certificate
+    /// Returns a CertStore, which uses the specified certificate
     /// directory.
     ///
     /// When a certificate is added or updated, it will be added to or
@@ -91,21 +91,21 @@ impl<'a> CertDB<'a> {
     {
         let path = path.as_ref();
 
-        Ok(CertDB {
+        Ok(CertStore {
             certd: Ok(store::CertD::open(path)?),
             backends: Vec::new(),
             keyserver: None,
         })
     }
 
-    /// Returns a CertDB, which uses the specified certificate
+    /// Returns a CertStore, which uses the specified certificate
     /// directory in read-only mode.
     pub fn open_readonly<P>(path: P) -> Result<Self>
         where P: AsRef<Path>
     {
         let path = path.as_ref();
 
-        let mut certdb = CertDB {
+        let mut certdb = CertStore {
             certd: Err(store::Certs::empty()),
             backends: Vec::new(),
             keyserver: None,
@@ -114,7 +114,7 @@ impl<'a> CertDB<'a> {
         Ok(certdb)
     }
 
-    /// Add the specified backend to the CertDB.
+    /// Add the specified backend to the CertStore.
     ///
     /// The backend is added to the collection of read-only backends.
     pub fn add_backend(&mut self, backend: Box<dyn store::Store<'a> + 'a>,
@@ -125,7 +125,7 @@ impl<'a> CertDB<'a> {
         self
     }
 
-    /// Adds the specified cert-d to the CertDB.
+    /// Adds the specified cert-d to the CertStore.
     ///
     /// The cert-d is added in read-only mode, and its access mode is
     /// set to `AccessMode::Always`.
@@ -138,7 +138,7 @@ impl<'a> CertDB<'a> {
         Ok(self)
     }
 
-    /// Adds the default cert-d to the CertDB.
+    /// Adds the default cert-d to the CertStore.
     ///
     /// The cert-d is added in read-only mode, and its access mode is
     /// set to `AccessMode::Always`.
@@ -149,7 +149,7 @@ impl<'a> CertDB<'a> {
         Ok(self)
     }
 
-    /// Adds the specified keyring to the CertDB.
+    /// Adds the specified keyring to the CertStore.
     ///
     /// The keyring is added in read-only mode, and its access mode is
     /// set to `AccessMode::Always`.
@@ -160,7 +160,7 @@ impl<'a> CertDB<'a> {
         Ok(self)
     }
 
-    /// Adds the specified keybox to the CertDB.
+    /// Adds the specified keybox to the CertStore.
     ///
     /// The keybox is added in read-only mode, and its access mode is
     /// set to `AccessMode::Always`.
@@ -171,7 +171,7 @@ impl<'a> CertDB<'a> {
         Ok(self)
     }
 
-    /// Adds the specified keyserver to the CertDB.
+    /// Adds the specified keyserver to the CertStore.
     ///
     /// The keyserver is added in read-only mode, and its access mode
     /// is set to `AccessMode::OnMiss`.
@@ -353,7 +353,7 @@ fn merge<'a, 'b>(mut certs: Vec<Cow<'b, LazyCert<'a>>>)
     certs
 }
 
-impl<'a> store::Store<'a> for CertDB<'a> {
+impl<'a> store::Store<'a> for CertStore<'a> {
     fn lookup_by_cert(&self, kh: &KeyHandle)
         -> Result<Vec<Cow<LazyCert<'a>>>>
     {
@@ -511,12 +511,12 @@ impl<'a> store::Store<'a> for CertDB<'a> {
     }
 }
 
-impl<'a> store::StoreUpdate<'a> for CertDB<'a> {
+impl<'a> store::StoreUpdate<'a> for CertStore<'a> {
     fn update_by<'ra>(&'ra mut self, cert: Cow<'ra, LazyCert<'a>>,
                       merge_strategy: &mut dyn MergeCerts<'a, 'ra>)
         -> Result<Cow<'ra, LazyCert<'a>>>
     {
-        tracer!(TRACE, "CertDB::update_by");
+        tracer!(TRACE, "CertStore::update_by");
         match self.certd.as_mut() {
             Ok(certd) => {
                 t!("Forwarding to underlying certd");

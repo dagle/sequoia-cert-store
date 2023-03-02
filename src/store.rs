@@ -807,16 +807,16 @@ impl<'a: 'ra, 'ra> MergeCerts<'a, 'ra> for MergePublicCollectStats {
     /// use openpgp::cert::prelude::*;
     /// use openpgp::parse::Parse;
     ///
-    /// use sequoia_cert_db as cert_db;
-    /// use cert_db::CertDB;
-    /// use cert_db::LazyCert;
-    /// use cert_db::store::MergePublicCollectStats;
-    /// use cert_db::store::StoreUpdate;
+    /// use sequoia_cert_store as cert_store;
+    /// use cert_store::CertStore;
+    /// use cert_store::LazyCert;
+    /// use cert_store::store::MergePublicCollectStats;
+    /// use cert_store::store::StoreUpdate;
     ///
     /// # fn main() -> Result<()> {
     /// let (cert, _rev) = CertBuilder::new().generate()?;
     ///
-    /// let mut certdb = CertDB::empty();
+    /// let mut certdb = CertStore::empty();
     ///
     /// let mut stats = MergePublicCollectStats::new();
     ///
@@ -1002,12 +1002,12 @@ mod tests {
         use openpgp::Cert;
         use openpgp::parse::Parse;
 
-        use crate::CertDB;
+        use crate::CertStore;
         use crate::store::MergePublicCollectStats;
 
         assert_eq!(keyring::certs.len(), 12);
 
-        let mut certdb = CertDB::empty();
+        let mut certdb = CertStore::empty();
 
         let mut stats = MergePublicCollectStats::new();
 

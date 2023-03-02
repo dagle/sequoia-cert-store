@@ -5,7 +5,7 @@ certificate stores via the `Store` trait.  It also provides a number
 of helper functions and data structures, like `UserIDIndex` to help
 implement this functionality.
 
-The `CertDB` data structure combines multiple certificate backends in
+The `CertStore` data structure combines multiple certificate backends in
 a transparent way to users.
 
 It supports multiple backends (a cert-d, a keyring, a keybox, an
