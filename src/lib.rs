@@ -1,14 +1,57 @@
 //! A certificate store abstraction.
 //!
 //! This crates provides a unified interface for different certificate
-//! stores via the [`Store`] trait.  It also provides a number of
-//! helper functions and data structures, like [`UserIDIndex`] to help
-//! implement this functionality.
+//! stores via the [`Store`] and [`StoreUpdate`] traits.  It also
+//! provides a number of helper functions and data structures, like
+//! [`UserIDIndex`] to help implement this functionality.
 //!
 //! [`UserIDIndex`]: store::UserIDIndex
 //!
 //! The [`CertStore`] data structure combines multiple certificate
 //! backends in a transparent way to users.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use std::borrow::Cow;
+//!
+//! use sequoia_openpgp as openpgp;
+//! # use openpgp::Result;
+//! use openpgp::cert::Cert;
+//! use openpgp::cert::CertBuilder;
+//!
+//! use sequoia_cert_store as cert_store;
+//! use cert_store::CertStore;
+//! use cert_store::LazyCert;
+//! use cert_store::Store;
+//! use cert_store::StoreUpdate;
+//!
+//! # fn main() -> Result<()> {
+//! // Create an in-memory certificate store.  To use the default
+//! // on-disk certificate store, use `CertStore::new`.
+//! let mut certs = CertStore::empty();
+//!
+//! let (cert, _rev) = CertBuilder::new().generate()?;
+//! let fpr = cert.fingerprint();
+//!
+//! // It's not in the cert store yet:
+//! assert!(certs.lookup_by_cert_fpr(&fpr).is_err());
+//!
+//! // Insert a certificate.  If using a backing store, it would
+//! // also be written to disk.
+//! certs.update(Cow::Owned(LazyCert::from(cert)))?;
+//!
+//! // Make sure it is there.
+//! let cert = certs.lookup_by_cert_fpr(&fpr).expect("present");
+//! assert_eq!(cert.fingerprint(), fpr);
+//!
+//! // Resolve the `LazyCert` to a `Cert`.  Certificates are stored
+//! // using `LazyCert` so that it is possible to work with `RawCert`s
+//! // and `Cert`s.  This allows the implementation to defer fully parsing
+//! // and validating the certificate until it is actually needed.
+//! let cert: &Cert = cert.to_cert()?;
+//! # Ok(()) }
+//! ```
 use std::str;
 
 use sequoia_openpgp as openpgp;
