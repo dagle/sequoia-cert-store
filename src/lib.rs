@@ -842,6 +842,31 @@ mod tests {
         Ok(())
     }
 
+
+    #[test]
+    fn certs_with_prefetch() -> Result<()> {
+        use std::io::Read;
+
+        assert_eq!(keyring::certs.len(), 12);
+
+        let mut bytes = Vec::new();
+        for cert in keyring::certs.iter() {
+            let binary = cert.bytes();
+            let mut reader = openpgp::armor::Reader::from_bytes(
+                &binary,
+                openpgp::armor::ReaderMode::VeryTolerant);
+            reader.read_to_end(&mut bytes)
+                .expect(&format!("{}", cert.base));
+        }
+
+        let mut backend = store::Certs::from_bytes(&bytes)
+            .expect("valid");
+        backend.prefetch_all();
+        test_backend(backend);
+
+        Ok(())
+    }
+
     // Make sure that when we update a certificate, we are able to
     // find any new components and we are still able to find the old
     // components.

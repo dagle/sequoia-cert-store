@@ -5,6 +5,8 @@ use std::collections::hash_map::Entry;
 use anyhow::Context;
 
 use sequoia_openpgp as openpgp;
+use openpgp::cert::Cert;
+use openpgp::cert::raw::RawCert;
 use openpgp::cert::raw::RawCertParser;
 use openpgp::Fingerprint;
 use openpgp::KeyID;
@@ -181,87 +183,135 @@ impl<'a> Store<'a> for Certs<'a>
     }
 
     fn prefetch_all(&mut self) {
-        // XXX: LazyCert is current not Sync and not Send (due to the
-        // use of RefCell).  That means the following doesn't work.
-        // We need to decide if we want to use Arc instead of Rc, etc.
+        self.prefetch_some(Vec::new())
+    }
 
-//        tracer!(TRACE, "Certs::prefetch");
-//
-//        use crossbeam::thread;
-//        use crossbeam::channel::unbounded as channel;
-//
-//        // Avoid an extra level of indentation.
-//        let result = thread::scope(|thread_scope| {
-//        let mut certs: Vec<&LazyCert>
-//            = self.certs.values().filter(|c| {
-//                c.raw_cert().is_some()
-//            }).collect();
-//        let cert_count = certs.len();
-//
-//        // The threads.  We start them on demand.
-//        let threads = if cert_count < 16 {
-//            // The keyring is small, limit the number of threads.
-//            2
-//        } else {
-//            // Sort the certificates so they are ordered from most
-//            // packets to least.  More packets implies more work, and
-//            // this will hopefully result in a more equal distribution
-//            // of load.
-//            certs.sort_unstable_by_key(|c| {
-//                usize::MAX - c.raw_cert().map(|r| r.count()).unwrap_or(0)
-//            });
-//
-//            // Use at least one and not more than we have cores.
-//            num_cpus::get().max(1)
-//        };
-//
-//        // A communication channel for sending work to the workers.
-//        let (work_tx, work_rx) = channel();
-//
-//        let mut threads_extant = Vec::new();
-//
-//        for cert in certs.into_iter() {
-//            if threads_extant.len() < threads {
-//                let tid = threads_extant.len();
-//                t!("Starting thread {} of {}",
-//                   tid, threads);
-//
-//                let mut work = Some(Ok(cert));
-//
-//                // The thread's state.
-//                let work_rx = work_rx.clone();
-//
-//                threads_extant.push(thread_scope.spawn(move |_| {
-//                    loop {
-//                        match work.take().unwrap_or_else(|| work_rx.recv()) {
-//                            Err(_) => break,
-//                            Ok(raw) => {
-//                                let fpr = cert.fingerprint();
-//                                t!("Thread {} dequeuing {}!", tid, fpr);
-//                                // Silently ignore errors.  This will
-//                                // be caught later when the caller
-//                                // looks this one up.
-//
-//                                let _ = raw.to_cert();
-//                            }
-//                        }
-//                    }
-//
-//                    t!("Thread {} exiting", tid);
-//                }));
-//            } else {
-//                work_tx.send(cert).unwrap();
-//            }
-//        }
-//
-//        // When the threads see this drop, they will exit.
-//        drop(work_tx);
-//        }); // thread scope.
-//
-//        // We're just caching results so we can ignore errors.
-//        if let Err(err) = result {
-//            t!("{:?}", err);
-//        }
+    fn prefetch_some(&mut self, khs: Vec<KeyHandle>) {
+        // LazyCert is currently not Sync or Send (due to the use of
+        // RefCell).  This requires a bit of acrobatics to get right.
+
+        tracer!(TRACE, "Certs::prefetch_some");
+        t!("Prefetch: {} certificates", khs.len());
+
+        use crossbeam::thread;
+        use crossbeam::channel::unbounded as channel;
+
+        // Avoid an extra level of indentation.
+        let result = thread::scope(|thread_scope| {
+        let mut certs: Vec<RawCert>
+            = self.certs.iter().filter_map(|(fpr, cert)| {
+                if cert.raw_cert().is_some() {
+                    if khs.is_empty()
+                        || khs.iter()
+                               .any(|kh| {
+                                   kh.aliases(&KeyHandle::from(fpr.clone()))
+                               })
+                    {
+                        // Unfortunately we have to clone the bytes,
+                        // because LazyCert puts the RawCert in a
+                        // RefCell.
+                        t!("Queuing {} to be prefetched", fpr);
+                        cert.clone().into_raw_cert().ok()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }).collect();
+        let cert_count = certs.len();
+
+        // The threads.  We start them on demand.
+        let threads = if cert_count < 16 {
+            // The keyring is small, limit the number of threads.
+            2
+        } else {
+            // Sort the certificates so they are ordered from most
+            // packets to least.  More packets implies more work, and
+            // this will hopefully result in a more equal distribution
+            // of load.
+            certs.sort_unstable_by_key(|c| {
+                usize::MAX - c.count()
+            });
+
+            // Use at least one and not more than we have cores.
+            num_cpus::get().max(1)
+        };
+        t!("Using {} threads", threads);
+
+        // A communication channel for sending work to the workers.
+        let (work_tx, work_rx) = channel();
+        // A communication channel for returning returns to the main
+        // thread.
+        let (results_tx, results_rx) = channel();
+
+        let mut threads_extant = Vec::new();
+
+        for cert in certs.into_iter() {
+            if threads_extant.len() < threads {
+                let tid = threads_extant.len();
+                t!("Starting thread {} of {}",
+                   tid, threads);
+
+                let mut work = Some(Ok(cert));
+
+                // The thread's state.
+                let work_rx = work_rx.clone();
+                let results_tx = results_tx.clone();
+
+                threads_extant.push(thread_scope.spawn(move |_| {
+                    loop {
+                        match work.take().unwrap_or_else(|| work_rx.recv()) {
+                            Err(_) => break,
+                            Ok(raw) => {
+                                t!("Thread {} dequeuing {}!",
+                                   tid, raw.keyid());
+
+                                // Silently ignore errors.  This will
+                                // be caught later when the caller
+                                // looks this one up.
+                                match Cert::try_from(&raw) {
+                                    Ok(cert) => {
+                                        let _ = results_tx.send(cert);
+                                    }
+                                    Err(err) => {
+                                        t!("Parsing raw cert {}: {}",
+                                           raw.keyid(), err);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    t!("Thread {} exiting", tid);
+                }));
+            } else {
+                work_tx.send(cert).unwrap();
+            }
+        }
+
+        // When the threads see this drop, they will exit.
+        drop(work_tx);
+        // Drop our reference to results_tx.  When the last thread
+        // exits, the last reference will be dropped and the loop
+        // below will exit.
+        drop(results_tx);
+
+        let mut count = 0;
+        while let Ok(cert) = results_rx.recv() {
+            let fpr = cert.fingerprint();
+            t!("Caching {}", fpr);
+            self.certs.insert(fpr, cert.into());
+            count += 1;
+        }
+        t!("Prefetched {} certificates, ({} RawCerts had errors)",
+           count, cert_count - count);
+        }); // thread scope.
+
+        // We're just caching results so we can ignore errors.
+        if let Err(err) = result {
+            t!("{:?}", err);
+        }
     }
 }
 
