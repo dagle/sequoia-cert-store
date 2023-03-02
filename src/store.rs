@@ -835,11 +835,11 @@ impl<'a: 'ra, 'ra> MergeCerts<'a, 'ra> for MergePublicCollectStats {
     /// # fn main() -> Result<()> {
     /// let (cert, _rev) = CertBuilder::new().generate()?;
     ///
-    /// let mut certdb = CertStore::empty();
+    /// let mut certs = CertStore::empty();
     ///
     /// let mut stats = MergePublicCollectStats::new();
     ///
-    /// certdb.update_by(Cow::Owned(LazyCert::from(cert)), &mut stats)
+    /// certs.update_by(Cow::Owned(LazyCert::from(cert)), &mut stats)
     ///         .expect("valid");
     ///
     /// assert_eq!(stats.new, 1);
@@ -1026,7 +1026,7 @@ mod tests {
 
         assert_eq!(keyring::certs.len(), 12);
 
-        let mut certdb = CertStore::empty();
+        let mut certs = CertStore::empty();
 
         let mut stats = MergePublicCollectStats::new();
 
@@ -1037,7 +1037,7 @@ mod tests {
             let fpr = cert.fingerprint();
             seen.insert(fpr.clone());
 
-            certdb.update_by(Cow::Owned(LazyCert::from(cert)), &mut stats)
+            certs.update_by(Cow::Owned(LazyCert::from(cert)), &mut stats)
                 .expect("valid");
 
             eprintln!("After inserting {} ({}), stats: {:?}",
@@ -1056,7 +1056,7 @@ mod tests {
             let cert = Cert::from_bytes(&cert.bytes()).expect("valid");
             let fpr = cert.fingerprint();
 
-            certdb.update_by(Cow::Owned(LazyCert::from(cert)), &mut stats)
+            certs.update_by(Cow::Owned(LazyCert::from(cert)), &mut stats)
                 .expect("valid");
 
             eprintln!("After reinserting {} ({}), stats: {:?}",

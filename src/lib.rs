@@ -732,7 +732,7 @@ mod tests {
 
 
     #[test]
-    fn certdb() -> Result<()> {
+    fn cert_store() -> Result<()> {
         use std::io::Read;
 
         // Sanity check how many certificates we read.
@@ -765,14 +765,14 @@ mod tests {
         }
         drop(certd);
 
-        let certdb = CertStore::open(&path).expect("exists");
-        test_backend(certdb);
+        let cert_store = CertStore::open(&path).expect("exists");
+        test_backend(cert_store);
 
         Ok(())
     }
 
     #[test]
-    fn certdb_layered() -> Result<()> {
+    fn cert_store_layered() -> Result<()> {
         use std::io::Read;
 
         assert_eq!(keyring::certs.len(), 12);
@@ -780,7 +780,7 @@ mod tests {
         // A certd for each certificate.
         let mut paths: Vec<tempfile::TempDir> = Vec::new();
 
-        let mut certdb = CertStore::empty();
+        let mut cert_store = CertStore::empty();
 
         for cert in keyring::certs.iter() {
             let path = tempfile::tempdir()?;
@@ -809,12 +809,12 @@ mod tests {
             drop(certd);
 
             let certd = store::CertD::open(&path).expect("valid");
-            certdb.add_backend(Box::new(certd), AccessMode::Always);
+            cert_store.add_backend(Box::new(certd), AccessMode::Always);
 
             paths.push(path);
         }
 
-        test_backend(certdb);
+        test_backend(cert_store);
 
         Ok(())
     }
@@ -1029,10 +1029,10 @@ mod tests {
 
     // Test StoreUpdate::update for CertStore.
     #[test]
-    fn test_store_update_certdb() -> Result<()> {
+    fn test_store_update_cert_store() -> Result<()> {
         let path = tempfile::tempdir()?;
-        let certdb = CertStore::open(&path).expect("exists");
-        test_store_update(certdb)
+        let cert_store = CertStore::open(&path).expect("exists");
+        test_store_update(cert_store)
     }
 
     // Test StoreUpdate::update for Certs.

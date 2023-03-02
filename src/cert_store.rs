@@ -72,13 +72,13 @@ impl<'a> CertStore<'a> {
     /// Returns a CertStore, which uses the default certificate
     /// directory in read-only mode.
     pub fn readonly() -> Result<Self> {
-        let mut certdb = CertStore {
+        let mut cert_store = CertStore {
             certd: Err(store::Certs::empty()),
             backends: Vec::new(),
             keyserver: None,
         };
-        certdb.add_default_certd()?;
-        Ok(certdb)
+        cert_store.add_default_certd()?;
+        Ok(cert_store)
     }
 
     /// Returns a CertStore, which uses the specified certificate
@@ -105,13 +105,13 @@ impl<'a> CertStore<'a> {
     {
         let path = path.as_ref();
 
-        let mut certdb = CertStore {
+        let mut cert_store = CertStore {
             certd: Err(store::Certs::empty()),
             backends: Vec::new(),
             keyserver: None,
         };
-        certdb.add_certd(path)?;
-        Ok(certdb)
+        cert_store.add_certd(path)?;
+        Ok(cert_store)
     }
 
     /// Add the specified backend to the CertStore.
