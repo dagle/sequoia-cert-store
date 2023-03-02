@@ -763,7 +763,7 @@ mod tests {
                 })
                 .expect("can insert");
         }
-        drop (certd);
+        drop(certd);
 
         let certdb = CertStore::open(&path).expect("exists");
         test_backend(certdb);
@@ -842,6 +842,45 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn certd_with_prefetch() -> Result<()> {
+        use std::io::Read;
+
+        assert_eq!(keyring::certs.len(), 12);
+
+        let path = tempfile::tempdir()?;
+        let certd = cert_d::CertD::with_base_dir(&path)
+            .map_err(|err| {
+                let err = anyhow::Error::from(err)
+                    .context(format!("While opening the certd {:?}", path));
+                print_error_chain(&err);
+                err
+            })?;
+
+        for cert in keyring::certs.iter() {
+            let bytes = cert.bytes();
+            let mut reader = openpgp::armor::Reader::from_bytes(
+                &bytes,
+                openpgp::armor::ReaderMode::VeryTolerant);
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes)
+                .expect(&format!("{}", cert.base));
+
+            certd
+                .insert(bytes.into_boxed_slice(), certd_merge)
+                .with_context(|| {
+                    format!("{} ({})", cert.base, cert.fingerprint)
+                })
+                .expect("can insert");
+        }
+        drop (certd);
+
+        let mut certd = store::CertD::open(&path).expect("exists");
+        certd.prefetch_all();
+        test_backend(certd);
+
+        Ok(())
+    }
 
     #[test]
     fn certs_with_prefetch() -> Result<()> {

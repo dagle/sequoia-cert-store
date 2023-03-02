@@ -1,8 +1,5 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::collections::hash_map;
 use std::fs;
-use std::rc::Rc;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str;
@@ -12,11 +9,11 @@ use anyhow::Context;
 use sequoia_openpgp as openpgp;
 use openpgp::Fingerprint;
 use openpgp::KeyHandle;
-use openpgp::KeyID;
 use openpgp::Packet;
 use openpgp::Result;
 use openpgp::cert::raw::RawCertParser;
 use openpgp::cert::prelude::*;
+use openpgp::packet::UserID;
 use openpgp::parse::Parse;
 use openpgp::serialize::SerializeInto;
 
@@ -24,11 +21,10 @@ use openpgp_cert_d as cert_d;
 
 use crate::LazyCert;
 use crate::print_error_chain;
+use crate::store::Certs;
 use crate::store::MergeCerts;
 use crate::store::Store;
-use crate::store::StoreError;
 use crate::store::StoreUpdate;
-use crate::store::UserIDIndex;
 use crate::store::UserIDQueryParams;
 
 use crate::TRACE;
@@ -37,15 +33,7 @@ pub struct CertD<'a> {
     certd: cert_d::CertD,
     path: PathBuf,
 
-    by_cert_fpr: HashMap<Fingerprint, Rc<LazyCert<'a>>>,
-    by_cert_keyid: HashMap<KeyID, Vec<Rc<LazyCert<'a>>>>,
-
-    // It is possible that the same key can be bound to multiple
-    // certificates.
-    by_subkey_fpr: HashMap<Fingerprint, Vec<Rc<LazyCert<'a>>>>,
-    by_subkey_keyid: HashMap<KeyID, Vec<Rc<LazyCert<'a>>>>,
-
-    userid_index: UserIDIndex,
+    certs: Certs<'a>,
 }
 
 impl<'a> CertD<'a> {
@@ -95,12 +83,7 @@ impl<'a> CertD<'a> {
         let mut certd = Self {
             certd,
             path,
-            by_cert_fpr: HashMap::default(),
-            by_cert_keyid: HashMap::default(),
-            by_subkey_fpr: HashMap::default(),
-            by_subkey_keyid: HashMap::default(),
-
-            userid_index: UserIDIndex::new(),
+            certs: Certs::empty(),
         };
 
         certd.initialize(true)?;
@@ -116,106 +99,6 @@ impl<'a> CertD<'a> {
     /// is one.
     pub fn certd_mut(&mut self) -> &mut openpgp_cert_d::CertD {
         &mut self.certd
-    }
-
-    /// Inserts the given cert into the in-memory database.
-    fn index<C>(&mut self, _tag: Option<openpgp_cert_d::Tag>, cert: C)
-        where C: Into<LazyCert<'a>>
-    {
-        tracer!(TRACE, "CertD::index");
-        let cert = cert.into();
-        t!("Inserting {} into the in-core index", cert.fingerprint());
-        let rccert = Rc::new(cert);
-
-        // Check if the certificate is already present.  If so, we are
-        // reupdating so avoid duplicates.
-
-        let fpr = rccert.fingerprint();
-        let update = match self.by_cert_fpr.entry(fpr.clone()) {
-            hash_map::Entry::Occupied(mut oe) => {
-                *oe.get_mut() = rccert.clone();
-                true
-            }
-            hash_map::Entry::Vacant(ve) => {
-                ve.insert(rccert.clone());
-                false
-            }
-        };
-
-        match self.by_cert_keyid.entry(KeyID::from(&fpr)) {
-            hash_map::Entry::Occupied(mut oe) => {
-                let certs = oe.get_mut();
-                let mut set = false;
-                if update {
-                    for c in certs.iter_mut() {
-                        if c.fingerprint() == fpr {
-                            *c = rccert.clone();
-                            set = true;
-                            break;
-                        }
-                    }
-                }
-
-                if ! set {
-                    certs.push(rccert.clone());
-                }
-            }
-            hash_map::Entry::Vacant(ve) => {
-                ve.insert(vec![ rccert.clone() ]);
-            }
-        }
-
-        for subkey in rccert.subkeys() {
-            let subkey_fpr = subkey.fingerprint();
-
-            match self.by_subkey_fpr.entry(subkey_fpr.clone()) {
-                hash_map::Entry::Occupied(mut oe) => {
-                    let certs = oe.get_mut();
-                    let mut set = false;
-                    if update {
-                        for c in certs.iter_mut() {
-                            if c.fingerprint() == fpr {
-                                *c = rccert.clone();
-                                set = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if ! set {
-                        certs.push(rccert.clone());
-                    }
-                }
-                hash_map::Entry::Vacant(ve) => {
-                    ve.insert(vec![ rccert.clone() ]);
-                }
-            }
-
-            match self.by_subkey_keyid.entry(KeyID::from(&subkey_fpr)) {
-                hash_map::Entry::Occupied(mut oe) => {
-                    let certs = oe.get_mut();
-                    let mut set = false;
-                    if update {
-                        for c in certs.iter_mut() {
-                            if c.fingerprint() == fpr {
-                                *c = rccert.clone();
-                                set = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if ! set {
-                        certs.push(rccert.clone());
-                    }
-                }
-                hash_map::Entry::Vacant(ve) => {
-                    ve.insert(vec![ rccert.clone() ]);
-                }
-            }
-        }
-
-        self.userid_index.insert(&fpr, rccert.userids());
     }
 
     // Initialize a certd by reading the entries and populating the
@@ -254,7 +137,7 @@ impl<'a> CertD<'a> {
             }
         };
 
-        let result: Vec<(openpgp_cert_d::Tag, LazyCert)> = if lazy {
+        let result: Vec<(String, openpgp_cert_d::Tag, LazyCert)> = if lazy {
             items.collect::<Vec<_>>().into_par_iter()
                 .filter_map(|fp| {
                     // XXX: Once we have a cached tag, avoid the
@@ -275,7 +158,7 @@ impl<'a> CertD<'a> {
                     };
 
                     match parser.next() {
-                        Some(Ok(cert)) => Some((tag, LazyCert::from(cert))),
+                        Some(Ok(cert)) => Some((fp, tag, LazyCert::from(cert))),
                         Some(Err(err)) => {
                             let err = anyhow::Error::from(err).context(format!(
                                 "While parsing {:?} from the certd {:?}",
@@ -305,7 +188,7 @@ impl<'a> CertD<'a> {
                     // tags match.
                     t!("loading {} from overlay", fp);
                     match Cert::from_reader(file) {
-                        Ok(cert) => Some((tag, LazyCert::from(cert))),
+                        Ok(cert) => Some((fp, tag, LazyCert::from(cert))),
                         Err(err) => {
                             let err = anyhow::Error::from(err).context(format!(
                                 "While parsing {:?} from the certd {:?}",
@@ -318,8 +201,13 @@ impl<'a> CertD<'a> {
                 .collect()
         };
 
-        for (tag, cert) in result {
-            self.index(Some(tag), cert)
+        for (fp, _tag, cert) in result {
+            if let Err(err) = self.certs.update(Cow::Owned(cert)) {
+                // This is an in-memory index and updates doesn't
+                // fail.  Nevertheless, we don't panic.
+                t!("Error inserting {} into the in-memory index: {}",
+                   fp, err);
+            }
         }
 
         Ok(())
@@ -328,106 +216,62 @@ impl<'a> CertD<'a> {
 
 impl<'a> Store<'a> for CertD<'a> {
     fn lookup_by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        tracer!(TRACE, "CertD::lookup_by_cert");
-        t!("{}", kh);
+        self.certs.lookup_by_cert(kh)
+    }
 
-        match kh {
-            KeyHandle::Fingerprint(fpr) =>
-                self.by_cert_fpr.get(fpr)
-                    .ok_or_else(|| StoreError::NotFound(kh.clone()).into())
-                    .map(|cert| vec![ Cow::Borrowed(cert.as_ref()) ]),
-            KeyHandle::KeyID(id) =>
-                self.by_cert_keyid.get(id)
-                    .ok_or_else(|| StoreError::NotFound(kh.clone()).into())
-                    .map(|certs| {
-                        certs.iter()
-                            .map(|cert| {
-                                Cow::Borrowed(cert.as_ref())
-                            })
-                            .collect()
-                    }),
-        }
+    fn lookup_by_cert_fpr(&self, fingerprint: &Fingerprint)
+        -> Result<Cow<LazyCert<'a>>>
+    {
+        self.certs.lookup_by_cert_fpr(fingerprint)
     }
 
     fn lookup_by_key(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
-        tracer!(TRACE, "CertD::lookup_by_key");
-        t!("{}", kh);
+        self.certs.lookup_by_key(kh)
+    }
 
-        let mut by_cert: Vec<Cow<LazyCert>> = self.lookup_by_cert(kh)
-            .or_else(|err| {
-                if let Some(StoreError::NotFound(_))
-                    = err.downcast_ref::<StoreError>()
-                {
-                    Ok(Vec::new())
-                } else {
-                    Err(err)
-                }
-            })?;
+    fn select_userid(&self, query: &UserIDQueryParams, pattern: &str)
+        -> Result<Vec<Cow<LazyCert<'a>>>>
+    {
+        self.certs.select_userid(query, pattern)
+    }
 
-        let by_subkey: Option<&Vec<Rc<LazyCert>>> = match kh {
-            KeyHandle::Fingerprint(fpr) => self.by_subkey_fpr.get(fpr),
-            KeyHandle::KeyID(id) => self.by_subkey_keyid.get(id),
-        };
-        let mut by_subkey = if let Some(certs) = by_subkey {
-            certs.iter().map(|cert| Cow::Borrowed(cert.as_ref()))
-                .collect::<Vec<Cow<LazyCert>>>()
-        } else {
-            Vec::new()
-        };
+    fn lookup_by_userid(&self, userid: &UserID) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.certs.lookup_by_userid(userid)
+    }
 
-        // Combine them.  Avoid reallocating if possible.
-        let mut certs = if by_subkey.capacity() >= by_cert.len() + by_subkey.len() {
-            by_subkey.append(&mut by_cert);
-            by_subkey
-        } else {
-            by_cert.append(&mut by_subkey);
-            by_cert
-        };
+    fn grep_userid(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.certs.grep_userid(pattern)
+    }
 
-        // We could have get the same certificate multiple times if a
-        // key is a primary key and a subkey for the same certificate.
-        // To handle this, we need to deduplicate the results.
-        certs.sort_by_key(|c| c.fingerprint());
-        certs.dedup_by_key(|c| c.fingerprint());
+    fn lookup_by_email(&self, email: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.certs.lookup_by_email(email)
+    }
 
-        if certs.is_empty() {
-            Err(StoreError::NotFound(kh.clone()).into())
-        } else {
-            Ok(certs)
-        }
+    fn grep_email(&self, pattern: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.certs.grep_email(pattern)
+    }
+
+    fn lookup_by_email_domain(&self, domain: &str) -> Result<Vec<Cow<LazyCert<'a>>>> {
+        self.certs.lookup_by_email_domain(domain)
     }
 
     fn fingerprints<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
-        Box::new(self.by_cert_fpr.keys().cloned())
+        self.certs.fingerprints()
     }
 
-    fn certs<'b>(&'b self) -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
+    fn certs<'b>(&'b self)
+        -> Box<dyn Iterator<Item=Cow<'b, LazyCert<'a>>> + 'b>
         where 'a: 'b
     {
-        Box::new(self.by_cert_fpr
-                 .values()
-                 .map(|c| Cow::Borrowed(c.as_ref())))
-    }
-
-    fn select_userid(&self, params: &UserIDQueryParams, pattern: &str)
-        -> Result<Vec<Cow<LazyCert<'a>>>>
-    {
-        tracer!(TRACE, "CertD::select_userid");
-        t!("params: {:?}, pattern: {:?}", params, pattern);
-
-        let matches = self.userid_index.select_userid(params, pattern)?;
-
-        let matches = matches
-            .into_iter()
-            .map(|fpr| {
-                self.lookup_by_cert_fpr(&fpr).expect("indexed")
-            })
-            .collect();
-
-        Ok(matches)
+        self.certs.certs()
     }
 
     fn prefetch_all(&mut self) {
+        self.certs.prefetch_all()
+    }
+
+    fn prefetch_some(&mut self, certs: Vec<KeyHandle>) {
+        self.certs.prefetch_some(certs)
     }
 }
 
@@ -497,11 +341,13 @@ impl<'a> StoreUpdate<'a> for CertD<'a> {
         })?;
 
         let merged = merged.expect("set");
-        self.index(None, merged.into_owned());
+        // Inserting into the in-memory index is infallible.
+        if let Err(err) = self.certs.update(merged) {
+            t!("Inserting {} into in-memory index: {}", fpr, err);
+        }
         // Annoyingly, there is no easy way to get index to return a
         // reference to what it just inserted.
-        Ok(Cow::Borrowed(
-            self.by_cert_fpr.get(&fpr).expect("just set").as_ref()))
+        Ok(self.certs.lookup_by_cert_fpr(&fpr).expect("just set"))
     }
 }
 
@@ -513,6 +359,8 @@ mod tests {
 
     use openpgp::packet::UserID;
     use openpgp::serialize::Serialize;
+
+    use crate::store::StoreError;
 
     // Make sure that we can read a huge cert-d.  Specifically, the
     // typical file descriptor limit is 1024.  Make sure we can
