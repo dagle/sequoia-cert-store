@@ -499,14 +499,14 @@ impl<'a> store::Store<'a> for CertStore<'a> {
         Box::new(certs.into_iter())
     }
 
-    fn prefetch(&self) {
+    fn prefetch_all(&self) {
         match self.certd.as_ref() {
-            Ok(certd) => certd.prefetch(),
-            Err(in_memory) => in_memory.prefetch(),
+            Ok(certd) => certd.prefetch_all(),
+            Err(in_memory) => in_memory.prefetch_all(),
         };
 
         for (backend, _mode) in self.backends.iter() {
-            backend.prefetch();
+            backend.prefetch_all();
         }
     }
 }

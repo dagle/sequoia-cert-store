@@ -180,7 +180,7 @@ impl<'a> Store<'a> for Certs<'a>
             .map(|cert| Cow::Borrowed(cert)))
     }
 
-    fn prefetch(&self) {
+    fn prefetch_all(&self) {
         // XXX: LazyCert is current not Sync and not Send (due to the
         // use of RefCell).  That means the following doesn't work.
         // We need to decide if we want to use Arc instead of Rc, etc.

@@ -427,7 +427,7 @@ impl<'a> Store<'a> for CertD<'a> {
         Ok(matches)
     }
 
-    fn prefetch(&self) {
+    fn prefetch_all(&self) {
     }
 }
 
