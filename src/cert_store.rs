@@ -509,6 +509,17 @@ impl<'a> store::Store<'a> for CertStore<'a> {
             backend.prefetch_all();
         }
     }
+
+    fn prefetch_some(&self, certs: Vec<KeyHandle>) {
+        match self.certd.as_ref() {
+            Ok(certd) => certd.prefetch_some(certs.clone()),
+            Err(in_memory) => in_memory.prefetch_some(certs.clone()),
+        };
+
+        for (backend, _mode) in self.backends.iter() {
+            backend.prefetch_some(certs.clone());
+        }
+    }
 }
 
 impl<'a> store::StoreUpdate<'a> for CertStore<'a> {

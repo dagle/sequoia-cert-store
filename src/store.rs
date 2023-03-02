@@ -473,6 +473,21 @@ pub trait Store<'a> {
     /// operation in question is executed directly.
     fn prefetch_all(&self) {
     }
+
+    /// Prefetches some certificates.
+    ///
+    /// Prefilling the cache makes sense when you plan to examine some
+    /// certificates in the near future.
+    ///
+    /// This interface is useful as it allows batching, which may be
+    /// more efficient, especially when the certificates are accessed
+    /// over the network.  And, the function may be multi-threaded.
+    ///
+    /// Errors should be silently ignored and propagated when the
+    /// operation in question is executed directly.
+    fn prefetch_some(&self, certs: Vec<KeyHandle>) {
+        let _ = certs;
+    }
 }
 
 // The references in Store need a different lifetime from the contents
@@ -535,6 +550,10 @@ where T: Store<'a> + ?Sized + 't
     fn prefetch_all(&self) {
         self.as_ref().prefetch_all()
     }
+
+    fn prefetch_some(&self, certs: Vec<KeyHandle>) {
+        self.as_ref().prefetch_some(certs)
+    }
 }
 
 impl<'a: 't, 't, T> Store<'a> for &'t T
@@ -593,6 +612,10 @@ where T: Store<'a> + ?Sized
 
     fn prefetch_all(&self) {
         (*self).prefetch_all()
+    }
+
+    fn prefetch_some(&self, certs: Vec<KeyHandle>) {
+        (*self).prefetch_some(certs)
     }
 }
 
@@ -686,6 +709,10 @@ where T: Store<'a> + ?Sized
 
     fn prefetch_all(&self) {
         (**self).prefetch_all()
+    }
+
+    fn prefetch_some(&self, certs: Vec<KeyHandle>) {
+        (**self).prefetch_some(certs)
     }
 }
 
