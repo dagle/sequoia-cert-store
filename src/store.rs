@@ -471,7 +471,7 @@ pub trait Store<'a> {
     ///
     /// Errors should be silently ignored and propagated when the
     /// operation in question is executed directly.
-    fn prefetch_all(&self) {
+    fn prefetch_all(&mut self) {
     }
 
     /// Prefetches some certificates.
@@ -485,7 +485,7 @@ pub trait Store<'a> {
     ///
     /// Errors should be silently ignored and propagated when the
     /// operation in question is executed directly.
-    fn prefetch_some(&self, certs: Vec<KeyHandle>) {
+    fn prefetch_some(&mut self, certs: Vec<KeyHandle>) {
         let _ = certs;
     }
 }
@@ -547,11 +547,11 @@ where T: Store<'a> + ?Sized + 't
         self.as_ref().certs()
     }
 
-    fn prefetch_all(&self) {
+    fn prefetch_all(&mut self) {
         self.as_ref().prefetch_all()
     }
 
-    fn prefetch_some(&self, certs: Vec<KeyHandle>) {
+    fn prefetch_some(&mut self, certs: Vec<KeyHandle>) {
         self.as_ref().prefetch_some(certs)
     }
 }
@@ -608,14 +608,6 @@ where T: Store<'a> + ?Sized
         where 'a: 'b
     {
         (*self).certs()
-    }
-
-    fn prefetch_all(&self) {
-        (*self).prefetch_all()
-    }
-
-    fn prefetch_some(&self, certs: Vec<KeyHandle>) {
-        (*self).prefetch_some(certs)
     }
 }
 
@@ -707,11 +699,11 @@ where T: Store<'a> + ?Sized
         (**self).certs()
     }
 
-    fn prefetch_all(&self) {
+    fn prefetch_all(&mut self) {
         (**self).prefetch_all()
     }
 
-    fn prefetch_some(&self, certs: Vec<KeyHandle>) {
+    fn prefetch_some(&mut self, certs: Vec<KeyHandle>) {
         (**self).prefetch_some(certs)
     }
 }

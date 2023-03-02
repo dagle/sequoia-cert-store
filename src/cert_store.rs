@@ -499,24 +499,24 @@ impl<'a> store::Store<'a> for CertStore<'a> {
         Box::new(certs.into_iter())
     }
 
-    fn prefetch_all(&self) {
-        match self.certd.as_ref() {
+    fn prefetch_all(&mut self) {
+        match self.certd.as_mut() {
             Ok(certd) => certd.prefetch_all(),
             Err(in_memory) => in_memory.prefetch_all(),
         };
 
-        for (backend, _mode) in self.backends.iter() {
+        for (backend, _mode) in self.backends.iter_mut() {
             backend.prefetch_all();
         }
     }
 
-    fn prefetch_some(&self, certs: Vec<KeyHandle>) {
-        match self.certd.as_ref() {
+    fn prefetch_some(&mut self, certs: Vec<KeyHandle>) {
+        match self.certd.as_mut() {
             Ok(certd) => certd.prefetch_some(certs.clone()),
             Err(in_memory) => in_memory.prefetch_some(certs.clone()),
         };
 
-        for (backend, _mode) in self.backends.iter() {
+        for (backend, _mode) in self.backends.iter_mut() {
             backend.prefetch_some(certs.clone());
         }
     }
