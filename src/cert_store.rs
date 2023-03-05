@@ -175,8 +175,9 @@ impl<'a> CertStore<'a> {
     ///
     /// The keyserver is added in read-only mode, and its access mode
     /// is set to `AccessMode::OnMiss`.
-    pub fn add_keyserver(&mut self, _url: String) -> Result<&mut Self>
+    pub fn add_keyserver(&mut self, url: &str) -> Result<&mut Self>
     {
+        self.keyserver = Some(store::KeyServer::new(url)?);
         Ok(self)
     }
 
