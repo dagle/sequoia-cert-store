@@ -154,7 +154,9 @@ impl<'a> Store<'a> for KeyServer<'a> {
         tracer!(TRACE, "KeyServer::lookup_by_key");
 
         // Check the cache.
+        t!("Looking up {} on keyserver...", kh);
         if let Some(r) = self.check_cache(kh) {
+            t!("Found in in-memory cache");
             return r;
         }
 
@@ -169,6 +171,8 @@ impl<'a> Store<'a> for KeyServer<'a> {
 
         match r {
             Ok(cert) => {
+                t!("keyserver returned {}", cert.fingerprint());
+
                 // Add the result to the cache.
                 self.cache(cert.clone());
 
@@ -184,6 +188,8 @@ impl<'a> Store<'a> for KeyServer<'a> {
                 }
             }
             Err(err) => {
+                t!("keyserver returned an error: {}", err);
+
                 if let Some(net::Error::NotFound)
                     = err.downcast_ref::<net::Error>()
                 {
