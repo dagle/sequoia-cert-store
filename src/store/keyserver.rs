@@ -18,6 +18,8 @@ use sequoia_net as net;
 use crate::email_to_userid;
 use crate::LazyCert;
 use crate::Store;
+use crate::store::StatusListener;
+use crate::store::StatusUpdate;
 use crate::store::StoreError;
 use crate::store::UserIDQueryParams;
 
@@ -39,6 +41,10 @@ pub const PROTON_URL: &str = "hkps://api.protonmail.ch";
 pub struct KeyServer<'a> {
     keyserver: RefCell<net::KeyServer>,
 
+    id: String,
+    tx: RefCell<usize>,
+    listeners: Vec<Box<dyn StatusListener>>,
+
     // A cache.  We only cache certificates; we don't cache User ID
     // searches.
 
@@ -57,6 +63,14 @@ impl KeyServer<'_> {
         Ok(Self {
             keyserver: RefCell::new(
                 net::KeyServer::new(net::Policy::Encrypted, url)?),
+            id: if url.len() <= 10 {
+                // Only prefix "key server" if the URL is short.
+                format!("key server {}", url)
+            } else {
+                url.to_string()
+            },
+            tx: RefCell::new(0),
+            listeners: Vec::new(),
             hits_fpr: Default::default(),
             hits_keyid: Default::default(),
             misses_fpr: Default::default(),
@@ -84,6 +98,11 @@ impl KeyServer<'_> {
     /// Returns a key server instance that uses proton's keyserver.
     pub fn proton() -> Result<Self> {
         Self::new(PROTON_URL)
+    }
+
+    /// Sends status updates to the listener.
+    pub fn add_listener(&mut self, listener: Box<dyn StatusListener>) {
+        self.listeners.push(listener);
     }
 }
 
@@ -133,6 +152,20 @@ impl<'a> KeyServer<'a> {
     }
 }
 
+/// Sends a status update.
+macro_rules! update {
+    ( $self:expr, $update:ident, $($args:expr),* ) => {{
+        if ! $self.listeners.is_empty() {
+            let update = StatusUpdate::$update(
+                *$self.tx.borrow(), &$self.id, $($args),*);
+
+            for sub in $self.listeners.iter() {
+                sub.update(&update);
+            }
+        }
+    }}
+}
+
 impl<'a> Store<'a> for KeyServer<'a> {
     fn lookup_by_cert(&self, kh: &KeyHandle) -> Result<Vec<Cow<LazyCert<'a>>>> {
         let mut certs = self.lookup_by_key(kh)?;
@@ -155,8 +188,23 @@ impl<'a> Store<'a> for KeyServer<'a> {
 
         // Check the cache.
         t!("Looking up {} on keyserver...", kh);
+        if ! self.listeners.is_empty() {
+            let tx = *self.tx.borrow();
+            *self.tx.borrow_mut() = tx + 1;
+            update!(self, LookupStarted, kh, None);
+        };
+
         if let Some(r) = self.check_cache(kh) {
             t!("Found in in-memory cache");
+            match r.as_ref() {
+                Ok(certs) => {
+                    update!(self, LookupFinished, kh,
+                            &certs[..], Some("Found in in-memory cache"));
+                }
+                Err(err) => {
+                    update!(self, LookupFailed, kh, Some(&err));
+                }
+            }
             return r;
         }
 
@@ -179,10 +227,16 @@ impl<'a> Store<'a> for KeyServer<'a> {
                 // Make sure the key server gave us the right
                 // certificate.
                 if cert.keys().any(|k| k.key_handle().aliases(kh)) {
-                    Ok(vec![ Cow::Owned(LazyCert::from(cert)) ])
+                    let certs = vec![ Cow::Owned(LazyCert::from(cert)) ];
+                    update!(self, LookupFinished, kh, &certs[..], None);
+                    Ok(certs)
                 } else {
                     t!("keyserver returned the wrong key: {} (wanted: {})",
                        cert.key_handle(), kh);
+                    let err = anyhow::anyhow!("keyserver returned the wrong key: \
+                                               {} (wanted: {})",
+                                              cert.key_handle(), kh);
+                    update!(self, LookupFailed, kh, Some(&err));
                     Err(StoreError::NotFound(
                         KeyHandle::from(kh.clone())).into())
                 }
@@ -193,9 +247,11 @@ impl<'a> Store<'a> for KeyServer<'a> {
                 if let Some(net::Error::NotFound)
                     = err.downcast_ref::<net::Error>()
                 {
+                    update!(self, LookupFailed, kh, None);
                     Err(StoreError::NotFound(
                         KeyHandle::from(kh.clone())).into())
                 } else {
+                    update!(self, LookupFailed, kh, Some(&err));
                     Err(err)
                 }
             }
@@ -209,6 +265,11 @@ impl<'a> Store<'a> for KeyServer<'a> {
 
         t!("{}", pattern);
         t!("Looking {:?} up on the keyserver... ", pattern);
+        if ! self.listeners.is_empty() {
+            let tx = *self.tx.borrow();
+            *self.tx.borrow_mut() = tx + 1;
+            update!(self, SearchStarted, pattern, None);
+        }
 
         let email = if query.email && query.anchor_start && query.anchor_end {
             match email_to_userid(pattern) {
@@ -251,6 +312,10 @@ impl<'a> Store<'a> for KeyServer<'a> {
         match ks {
             Ok(c) => {
                 t!("Key server returned {} results", c.len());
+                if ! self.listeners.is_empty() {
+                    let msg = format!("Key server returned {} results", c.len());
+                    update!(self, SearchStatus, pattern, &msg);
+                }
                 certs.extend(c);
             },
             Err(err) => t!("Key server response: {}", err),
@@ -258,6 +323,11 @@ impl<'a> Store<'a> for KeyServer<'a> {
         match wkd {
             Ok(c) => {
                 t!("WKD server returned {} results", c.len());
+                if ! self.listeners.is_empty() {
+                    let msg = format!("WKD server returned {} results",
+                                      c.len());
+                    update!(self, SearchStatus, pattern, &msg);
+                }
                 certs.extend(c);
             },
             Err(err) => t!("WKD server response: {}", err),
@@ -291,34 +361,43 @@ impl<'a> Store<'a> for KeyServer<'a> {
             query.check_cert(cert.borrow(), pattern)
         });
 
-        t!("Got {} results:\n  {}",
-           certs.len(),
-           certs.iter().map(|cert: &Cert| {
-               format!(
-                   "{} ({})",
-                   cert.keyid().to_hex(),
-                   cert.with_policy(NP, None)
-                       .and_then(|vc| vc.primary_userid())
-                       .map(|ua| {
-                           String::from_utf8_lossy(ua.userid().value()).into_owned()
-                       })
-                       .unwrap_or_else(|_| {
-                           cert.userids().next()
-                               .map(|userid| {
-                                   String::from_utf8_lossy(userid.value()).into_owned()
-                               })
-                               .unwrap_or("<unknown>".into())
-                       }))
-           })
-           .collect::<Vec<_>>()
-           .join("\n  "));
-
         if certs.is_empty() {
+            update!(self, SearchFailed, pattern, None);
             Err(StoreError::NoMatches(pattern.to_string()).into())
         } else {
-            Ok(certs.into_iter().map(|cert| {
+            let certs: Vec<Cow<LazyCert>> = certs.into_iter().map(|cert| {
                 Cow::Owned(LazyCert::from(cert))
-            }).collect())
+            }).collect();
+            if TRACE || ! self.listeners.is_empty() {
+                let msg = format!(
+                    "Got {} results:\n  {}",
+                    certs.len(),
+                    certs.iter()
+                        .map(|cert: &Cow<LazyCert>| {
+                            format!(
+                                "{} ({})",
+                                cert.keyid().to_hex(),
+                                cert.with_policy(NP, None)
+                                    .and_then(|vc| vc.primary_userid())
+                                    .map(|ua| {
+                                        String::from_utf8_lossy(ua.userid().value())
+                                            .into_owned()
+                                    })
+                                    .unwrap_or_else(|_| {
+                                        cert.userids().next()
+                                            .map(|userid| {
+                                                String::from_utf8_lossy(userid.value())
+                                                    .into_owned()
+                                            })
+                                            .unwrap_or("<unknown>".into())
+                                    }))
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n  "));
+                t!("{}", msg);
+                update!(self, SearchFinished, pattern, &certs[..], Some(&msg));
+            }
+            Ok(certs)
         }
     }
 

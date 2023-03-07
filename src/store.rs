@@ -303,6 +303,227 @@ pub enum StoreError {
     InvalidEmail(String, #[source] Option<anyhow::Error>),
 }
 
+/// Status messages.
+///
+/// Status messages sent by [`StatusListener::update`].
+///
+/// The transaction id allows messages to be grouped together.  For
+/// instance, `LookupStarted` will return a new transaction id and
+/// further messages related to that lookup including `LookupFinished`
+/// and `LookupFailed` will use the same transaction id.
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum StatusUpdate<'a, 'c: 'rc, 'rc> {
+    /// Sent when a lookup is starting.
+    ///
+    /// usize is the transaction id.
+    ///
+    /// The first `&str` is a short human-readable description of the
+    /// backend.
+    ///
+    /// `KeyHandle` is what is being looked up.
+    ///
+    /// The last `&str` is a short human-readable message describing
+    /// the look up.
+    LookupStarted(usize, &'a str, &'a KeyHandle, Option<&'a str>),
+
+    /// Sent while a lookup is on-going.
+    ///
+    /// usize is the transaction id.  It will match the transaction id
+    /// sent in the `LookupStart` message.
+    ///
+    /// The first `&str` is a short human-readable description of the
+    /// backend.
+    ///
+    /// `KeyHandle` is what was being looked up.
+    ///
+    /// The last `&str` is a short human-readable message describing
+    /// something that happened, e.g., "WKD returned FPR", etc.
+    LookupStatus(usize, &'a str, &'a KeyHandle, &'a str),
+
+    /// Sent when a lookup has been successful.
+    ///
+    /// usize is the transaction id.  It will match the transaction id
+    /// sent in the `LookupStart` message.
+    ///
+    /// The first `&str` is a short human-readable description of the
+    /// backend.
+    ///
+    /// `KeyHandle` is what was being looked up.
+    ///
+    /// The certificates are the returned results.
+    ///
+    /// The last `&str` is a short human-readable message describing
+    /// what happened, e.g., "found in cache", etc.
+    LookupFinished(usize, &'a str, &'a KeyHandle,
+                   &'a [Cow<'rc, LazyCert<'c>>], Option<&'a str>),
+
+    /// Sent when a lookup has failed.
+    ///
+    /// usize is the transaction id.  It will match the transaction id
+    /// sent in the `LookupStart` message.
+    ///
+    /// The first `&str` is a short human-readable description of the
+    /// backend.
+    ///
+    /// `KeyHandle` is what was being looked up.
+    ///
+    /// The error is the reason that the lookup failed.  A backend
+    /// should set this to `None` if no certificate was present.
+    LookupFailed(usize, &'a str, &'a KeyHandle, Option<&'a anyhow::Error>),
+
+    /// Sent when a search is started.
+    ///
+    /// usize is the transaction id.
+    ///
+    /// The first `&str` is a short human-readable description of the
+    /// backend.
+    ///
+    /// The second `&str` is the pattern being searched for.
+    ///
+    /// The last `&str` is a short human-readable message describing
+    /// what is being looked up.
+    SearchStarted(usize, &'a str, &'a str, Option<&'a str>),
+
+    /// Sent while a search is on-going.
+    ///
+    /// usize is the transaction id.  It will match the transaction id
+    /// sent in the `LookupStart` message.
+    ///
+    /// The first `&str` is a short human-readable description of the
+    /// backend.
+    ///
+    /// The second `&str` is the pattern being searched for.
+    ///
+    /// The last `&str` is a short human-readable message describing
+    /// something that happened, e.g., "WKD returned FPR", etc.
+    SearchStatus(usize, &'a str, &'a str, &'a str),
+
+    /// Sent when a search is successful.
+    ///
+    /// usize is the transaction id.  It will match the transaction id
+    /// sent in the `LookupStart` message.
+    ///
+    /// The first `&str` is a short human-readable description of the
+    /// backend.
+    ///
+    /// The second `&str` is the pattern being searched for.
+    ///
+    /// The certificates are the returned results.
+    ///
+    /// The last `&str` is a short human-readable message describing
+    /// what happened, e.g., "found in cache", "found 5 matching
+    /// certificates", etc.
+    SearchFinished(usize, &'a str, &'a str, &'a [Cow<'rc, LazyCert<'c>>],
+                   Option<&'a str>),
+
+    /// Sent whenever something has been lookup successfully.
+    ///
+    /// usize is the transaction id.  It will match the transaction id
+    /// sent in the `LookupStart` message.
+    ///
+    /// The first `&str` is a short human-readable description of the
+    /// backend.
+    ///
+    /// The second `&str` is the pattern being searched for.
+    ///
+    /// The error is the reason that the search failed.  A backend
+    /// should set this to `None` if no matching certificate was
+    /// found.
+    SearchFailed(usize, &'a str, &'a str, Option<&'a anyhow::Error>),
+}
+
+impl<'a, 'c: 'rc, 'rc> std::fmt::Display for StatusUpdate<'a, 'c, 'rc> {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>)
+        -> std::result::Result<(), std::fmt::Error>
+    {
+        use StatusUpdate::*;
+
+        match self {
+            LookupStarted(_tx, backend, kh, msg) => {
+                if let Some(msg) = msg {
+                    write!(fmt, "{}: Looking up {}: {}...",
+                           backend, kh, msg)
+                } else {
+                    write!(fmt, "{}: Looking up {}...",
+                           backend, kh)
+                }
+            }
+            LookupStatus(_tx, backend, kh, msg) => {
+                write!(fmt, "{}: Looking up {}: {}",
+                       backend, kh, msg)
+            }
+            LookupFinished(_tx, backend, kh, results, msg) => {
+                if let Some(msg) = msg {
+                    write!(fmt, "{}: Looking up {}, returned {} results: {}",
+                           backend, kh, results.len(), msg)
+                } else {
+                    write!(fmt, "{}: Looking up {}, returned {} results",
+                           backend, kh, results.len())
+                }
+            }
+            LookupFailed(_tx, backend, kh, err) => {
+                if let Some(err) = err {
+                    write!(fmt, "{}: Looking up {}, failed: {}",
+                           backend, kh, err)
+                } else {
+                    write!(fmt, "{}: Looking up {}, returned no results",
+                           backend, kh)
+                }
+            }
+
+            SearchStarted(_tx, backend, pattern, msg) => {
+                if let Some(msg) = msg {
+                    write!(fmt, "{}: Searching for {:?}: {}...",
+                           backend, pattern, msg)
+                } else {
+                    write!(fmt, "{}: Searching for {:?}...",
+                           backend, pattern)
+                }
+            }
+            SearchStatus(_tx, backend, pattern, msg) => {
+                write!(fmt, "{}: Searching for {:?}: {}",
+                       backend, pattern, msg)
+            }
+            SearchFinished(_tx, backend, pattern, results, msg) => {
+                if let Some(msg) = msg {
+                    write!(fmt, "{}: Searching for {:?}, returned {} results: {}",
+                           backend, pattern, results.len(), msg)
+                } else {
+                    write!(fmt, "{}: Searching for {:?}, returned {} results",
+                           backend, pattern, results.len())
+                }
+            }
+            SearchFailed(_tx, backend, pattern, err) => {
+                if let Some(err) = err {
+                    write!(fmt, "{}: Searching for {:?} failed: {}",
+                           backend, pattern, err)
+                } else {
+                    write!(fmt, "{}: Searching for {:?}, returned no results",
+                           backend, pattern)
+                }
+            }
+        }
+    }
+}
+
+
+/// A callback mechanism to indicate what a backend is doing.
+///
+/// We use an enum instead of a separate function for each message so
+/// that a naive listener can just print each message to stdout.
+///
+/// This is primarily interesting for backends like a keyserver.
+///
+/// Currently, backends are not required to implement this trait.  In
+/// fact [`KeyServer`] is the only backend that implements it.  A
+/// caller can add a listener to a `KeyServer` using
+/// [`KeyServer::add_listener`].
+pub trait StatusListener {
+    /// A status update.
+    fn update(&self, status: &StatusUpdate);
+}
+
 /// Returns certificates from a backing store.
 pub trait Store<'a> {
     /// Returns the certificates whose fingerprint matches the handle.
