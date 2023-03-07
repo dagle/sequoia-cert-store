@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::path::Path;
 
+use anyhow::Context;
+
 use sequoia_openpgp as openpgp;
 use openpgp::Fingerprint;
 use openpgp::KeyHandle;
@@ -9,8 +11,10 @@ use openpgp::packet::UserID;
 
 use crate::LazyCert;
 use crate::store;
-use crate::store::MergeCerts;
+use store::MergeCerts;
+use store::Store;
 use store::StoreError;
+use store::StoreUpdate;
 use store::UserIDQueryParams;
 
 use crate::TRACE;
@@ -539,5 +543,66 @@ impl<'a> store::StoreUpdate<'a> for CertStore<'a> {
                 in_memory.update_by(cert, merge_strategy)
             }
         }
+    }
+}
+
+impl<'a> CertStore<'a> {
+    /// Flushes any modified certificates to the backing store.
+    ///
+    /// Currently, this flushes the key server cache to the underlying
+    /// cert-d, if any.  All other backends are currently expected to
+    /// work in a write-through manner.
+    ///
+    /// Note: this is called automatically when the `CertStore` is
+    /// dropped.
+    fn flush(&mut self) -> Result<()> {
+        // Sync the key server's cache to the backing store.
+        tracer!(TRACE, "CertStore::flush");
+        t!("flushing");
+
+        let certd = if let Ok(certd) = self.certd.as_mut() {
+            certd
+        } else {
+            // We don't have a writable backing store so we can't sync
+            // anything to it.  We're done.
+            t!("no certd, can't sync");
+            return Ok(());
+        };
+
+        let ks = if let Some(ks) = self.keyserver.as_ref() {
+            ks
+        } else {
+            // We don't have a key server.  There is clearly nothing
+            // to sync.
+            t!("no keyserver, can't sync");
+            return Ok(());
+        };
+
+        let mut count = 0;
+        let mut result = Ok(());
+        for c in ks.certs() {
+            count += 1;
+
+            let keyid = c.keyid();
+            if let Err(err) = certd.update(c) {
+                t!("syncing {} to the cert-d: {}", keyid, err);
+                if result.is_ok() {
+                    result = Err(err)
+                        .with_context(|| {
+                            format!("Flushing changes to {} to disk",
+                                    keyid)
+                        })
+                }
+            }
+        }
+
+        t!("Flushed {} certificates", count);
+        result
+    }
+}
+
+impl<'a> Drop for CertStore<'a> {
+    fn drop(&mut self) {
+        let _ = self.flush();
     }
 }
