@@ -323,7 +323,13 @@ impl<'a> Store<'a> for KeyServer<'a> {
     }
 
     fn fingerprints<'b>(&'b self) -> Box<dyn Iterator<Item=Fingerprint> + 'b> {
-        // Return nothing, not even the entries in our cache.
-        Box::new(std::iter::empty())
+        // Return the entries in our cache.
+        Box::new(self
+                 .hits_fpr
+                 .borrow()
+                 .keys()
+                 .cloned()
+                 .collect::<Vec<_>>()
+                 .into_iter())
     }
 }
