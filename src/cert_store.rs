@@ -47,7 +47,7 @@ pub struct CertStore<'a> {
     // Read-only backends.
     backends: Vec<(Box<dyn store::Store<'a> + 'a>, AccessMode)>,
 
-    keyserver: Option<store::KeyServer<'a>>,
+    keyserver: Option<Box<dyn store::Store<'a> + 'a>>,
 }
 
 impl<'a> CertStore<'a> {
@@ -181,7 +181,22 @@ impl<'a> CertStore<'a> {
     /// is set to `AccessMode::OnMiss`.
     pub fn add_keyserver(&mut self, url: &str) -> Result<&mut Self>
     {
-        self.keyserver = Some(store::KeyServer::new(url)?);
+        self.keyserver = Some(Box::new(store::KeyServer::new(url)?));
+        Ok(self)
+    }
+
+    /// Adds the specified keyserver to the CertStore.
+    ///
+    /// The keyserver is added in read-only mode, and its access mode
+    /// is set to `AccessMode::OnMiss`.
+    ///
+    /// A key server is treated specially from other backends: any
+    /// results that it returns are written to the cert store (if it
+    /// is open in read-write mode).
+    pub fn add_keyserver_backend(&mut self, ks: Box<dyn store::Store<'a> + 'a>)
+        -> Result<&mut Self>
+    {
+        self.keyserver = Some(ks);
         Ok(self)
     }
 
