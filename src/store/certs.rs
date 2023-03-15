@@ -2,6 +2,9 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
+use smallvec::SmallVec;
+use smallvec::smallvec;
+
 use anyhow::Context;
 
 use sequoia_openpgp as openpgp;
@@ -33,7 +36,7 @@ pub struct Certs<'a> {
     certs: HashMap<Fingerprint, LazyCert<'a>>,
     // Indexed by a key's KeyID (primary key or subkey) and maps to
     // the primary key.
-    keys: HashMap<KeyID, Vec<Fingerprint>>,
+    keys: HashMap<KeyID, SmallVec<[Fingerprint; 1]>>,
 
     userid_index: UserIDIndex,
 }
@@ -358,7 +361,7 @@ impl<'a> StoreUpdate<'a> for Certs<'a> {
                     }
                 }
                 Entry::Vacant(ve) => {
-                    ve.insert(vec![ fpr.clone() ]);
+                    ve.insert(smallvec![ fpr.clone() ]);
                 }
             }
         }
