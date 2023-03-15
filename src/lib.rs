@@ -74,6 +74,7 @@ pub use lazy_cert::LazyCert;
 const TRACE: bool = false;
 
 /// Prints the error and causes, if any.
+#[allow(unused)]
 fn print_error_chain(err: &anyhow::Error) {
     let _ = write_error_chain_into(&mut std::io::stderr(), err);
 }

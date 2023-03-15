@@ -20,7 +20,6 @@ use openpgp::serialize::SerializeInto;
 use openpgp_cert_d as cert_d;
 
 use crate::LazyCert;
-use crate::print_error_chain;
 use crate::store::Certs;
 use crate::store::MergeCerts;
 use crate::store::Store;
@@ -74,9 +73,9 @@ impl<'a> CertD<'a> {
 
         let certd = openpgp_cert_d::CertD::with_base_dir(&path)
             .map_err(|err| {
+                t!("While opening the certd {:?}: {}", path, err);
                 let err = anyhow::Error::from(err)
                     .context(format!("While opening the certd {:?}", path));
-                print_error_chain(&err);
                 err
             })?;
 
@@ -149,10 +148,8 @@ impl<'a> CertD<'a> {
                     let mut parser = match RawCertParser::from_reader(file) {
                         Ok(parser) => parser,
                         Err(err) => {
-                            let err = anyhow::Error::from(err).context(format!(
-                                "While reading {:?} from the certd {:?}",
-                                fp, self.path));
-                            print_error_chain(&err);
+                            t!("While reading {:?} from the certd {:?}: {}",
+                               fp, self.path, err);
                             return None;
                         }
                     };
@@ -160,17 +157,13 @@ impl<'a> CertD<'a> {
                     match parser.next() {
                         Some(Ok(cert)) => Some((fp, tag, LazyCert::from(cert))),
                         Some(Err(err)) => {
-                            let err = anyhow::Error::from(err).context(format!(
-                                "While parsing {:?} from the certd {:?}",
-                                fp, self.path));
-                            print_error_chain(&err);
+                            t!("While parsing {:?} from the certd {:?}: {}",
+                                fp, self.path, err);
                             None
                         }
                         None => {
-                            let err = anyhow::anyhow!(format!(
-                                "While parsing {:?} from the certd {:?}: empty file",
-                                fp, self.path));
-                            print_error_chain(&err);
+                            t!("While parsing {:?} from the certd {:?}: empty file",
+                                fp, self.path);
                             None
                         }
                     }
@@ -190,10 +183,8 @@ impl<'a> CertD<'a> {
                     match Cert::from_reader(file) {
                         Ok(cert) => Some((fp, tag, LazyCert::from(cert))),
                         Err(err) => {
-                            let err = anyhow::Error::from(err).context(format!(
-                                "While parsing {:?} from the certd {:?}",
-                                fp, self.path));
-                            print_error_chain(&err);
+                            t!("While parsing {:?} from the certd {:?}: {}",
+                               fp, self.path, err);
                             None
                         }
                     }
@@ -361,6 +352,7 @@ mod tests {
     use openpgp::serialize::Serialize;
 
     use crate::store::StoreError;
+    use crate::print_error_chain;
 
     // Make sure that we can read a huge cert-d.  Specifically, the
     // typical file descriptor limit is 1024.  Make sure we can
