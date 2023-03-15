@@ -1,6 +1,6 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
+use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 
 use smallvec::SmallVec;
 use smallvec::smallvec;
@@ -33,10 +33,10 @@ const TRACE: bool = false;
 /// updates to disk; they are only updated in memory.
 pub struct Certs<'a> {
     // Indexed by primary key fingerprint.
-    certs: HashMap<Fingerprint, LazyCert<'a>>,
+    certs: BTreeMap<Fingerprint, LazyCert<'a>>,
     // Indexed by a key's KeyID (primary key or subkey) and maps to
     // the primary key.
-    keys: HashMap<KeyID, SmallVec<[Fingerprint; 1]>>,
+    keys: BTreeMap<KeyID, SmallVec<[Fingerprint; 1]>>,
 
     userid_index: UserIDIndex,
 }
@@ -49,8 +49,8 @@ impl<'a> Certs<'a>
     /// be added to it using the [`StoreUpdate`] interface.
     pub fn empty() -> Self {
         Certs {
-            certs: HashMap::new(),
-            keys: HashMap::new(),
+            certs: Default::default(),
+            keys: Default::default(),
             userid_index: UserIDIndex::new(),
         }
     }
@@ -96,7 +96,7 @@ impl<'a> Store<'a> for Certs<'a>
                 self.lookup_by_cert_fpr(fpr).map(|c| vec![ c ])
             }
             KeyHandle::KeyID(keyid) => {
-                let certs: Vec<Cow<LazyCert>> = self.keys.get(&keyid)
+                let certs: Vec<Cow<LazyCert>> = self.keys.get(keyid)
                     .ok_or_else(|| {
                         anyhow::Error::from(
                             StoreError::NotFound(kh.clone()))

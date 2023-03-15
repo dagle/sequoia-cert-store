@@ -1,8 +1,8 @@
 use std::borrow::Borrow;
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use sequoia_openpgp as openpgp;
@@ -50,11 +50,11 @@ pub struct KeyServer<'a> {
 
     // Primary keys and subkeys.
     // XXX: Use an Rc<LazyCert> instead.
-    hits_fpr: RefCell<HashMap<Fingerprint, Rc<LazyCert<'a>>>>,
-    hits_keyid: RefCell<HashMap<KeyID, Fingerprint>>,
+    hits_fpr: RefCell<BTreeMap<Fingerprint, Rc<LazyCert<'a>>>>,
+    hits_keyid: RefCell<BTreeMap<KeyID, Fingerprint>>,
     // What we failed to look up.
-    misses_fpr: RefCell<HashSet<Fingerprint>>,
-    misses_keyid: RefCell<HashSet<KeyID>>,
+    misses_fpr: RefCell<BTreeSet<Fingerprint>>,
+    misses_keyid: RefCell<BTreeSet<KeyID>>,
 }
 
 impl KeyServer<'_> {
