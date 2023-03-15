@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::VecDeque;
 use std::str;
 
 use sequoia_openpgp as openpgp;
@@ -36,14 +38,19 @@ pub struct UserIDIndex {
     // use a `BTreeMap::range`.  That requires a bit of gynastics.
     // Alternatively we could use a trie, which is keyed on (domain,
     // localpart).
-    by_email: BTreeMap<String, BTreeSet<Fingerprint>>,
+    by_email: RefCell<BTreeMap<String, BTreeSet<Fingerprint>>>,
+    // Because extracting the email address is expensive, we wait
+    // until a caller actually needs `by_email`.  In particular, when
+    // used in a one-shot context, `by_email` is not access at all.
+    by_email_pending: RefCell<VecDeque<(UserID, Fingerprint)>>,
 }
 
 impl Default for UserIDIndex {
     fn default() -> Self {
         UserIDIndex {
             by_userid: Default::default(),
-            by_email: Default::default(),
+            by_email: RefCell::new(Default::default()),
+            by_email_pending: RefCell::new(VecDeque::new()),
         }
     }
 }
@@ -69,8 +76,19 @@ impl UserIDIndex {
                 .or_default()
                 .insert(fpr.clone());
 
+            self.by_email_pending.borrow_mut()
+                .push_back((userid, fpr.clone()));
+        }
+    }
+
+    /// Executes any pending insertions.
+    ///
+    /// This needs to be called before accessing by_email.
+    fn execute_pending_insertions(&self) {
+        for (userid, fpr) in self.by_email_pending.borrow_mut().drain(..) {
             if let Ok(Some(email)) = userid.email_normalized() {
-                self.by_email.entry(email)
+                self.by_email.borrow_mut()
+                    .entry(email)
                     .or_default()
                     .insert(fpr.clone());
             }
@@ -114,7 +132,9 @@ impl UserIDIndex {
                 ignore_case: false,
             } => {
                 // Exact email match.
-                self.by_email.get(pattern)
+                self.execute_pending_insertions();
+                self.by_email.borrow()
+                    .get(pattern)
                     .ok_or_else(|| {
                         StoreError::NoMatches(pattern.into())
                     })?
@@ -177,7 +197,9 @@ impl UserIDIndex {
                 };
 
                 if *email {
+                    self.execute_pending_insertions();
                     self.by_email
+                        .borrow()
                         .iter()
                         .filter_map(|(email, matches)| {
                             if check(email) {
