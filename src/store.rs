@@ -595,7 +595,7 @@ pub trait Store<'a> {
             pattern)
     }
 
-    /// Returns certificates that have User ID with the specified
+    /// Returns certificates that have a User ID with the specified
     /// email address.
     ///
     /// The pattern is interpreted as an email address.  It is first
@@ -906,19 +906,17 @@ pub trait MergeCerts<'a: 'ra, 'ra> {
     /// [`StoreUpdate::update_by`].
     ///
     /// The default implementation merges the two certificates using
-    /// [`Cert::merge_public`].  When a variant of a packet is present
-    /// in the on-disk version and the new version, the variant in the
-    /// new version is preferred.  This can be the case with signature
-    /// packets, for instance, when the unhashed subpacket areas
-    /// differ, but the signatures are otherwise the same.
+    /// [`Cert::merge_public`].  This means that any secret key
+    /// material in `disk` is preserved, any secret key material in
+    /// `new` is ignored, and unhashed subpacket areas are merged.
     fn merge<'b, 'rb>(&mut self,
                       new: Cow<'ra, LazyCert<'a>>,
                       disk: Option<Cow<'rb, LazyCert<'b>>>)
                       -> Result<Cow<'ra, LazyCert<'a>>>
     {
         if let Some(disk) = disk {
-            let merged = new.into_owned().into_cert()?
-                .merge_public(disk.as_cert()?)?;
+            let merged = disk.as_cert()?
+                .merge_public(new.into_owned().into_cert()?)?;
             Ok(Cow::Owned(LazyCert::from(merged)))
         } else {
             Ok(new)
@@ -1092,23 +1090,21 @@ impl<'a: 'ra, 'ra> MergeCerts<'a, 'ra> for MergePublicCollectStats {
                         fpr)
             })?;
 
-        // If the on-disk version has secrets, we
-        // preserve them.
-        let disk_packets = disk.into_packets();
-
-        match new.insert_packets2(disk_packets) {
-            Ok((merged, changed)) => {
-                if changed {
+        if disk == new {
+            self.unchanged += 1;
+            Ok(Cow::Owned(LazyCert::from(new)))
+        } else {
+            // If the on-disk version has secrets, we preserve them.
+            // If new has secrets, we ignore them.
+            match disk.merge_public(new) {
+                Ok(merged) => {
                     self.updated += 1;
-                } else {
-                    self.unchanged += 1;
+                    Ok(Cow::Owned(LazyCert::from(merged)))
                 }
-
-                Ok(Cow::Owned(LazyCert::from(merged)))
-            }
-            Err(err) => {
-                self.errors += 1;
-                Err(err.into())
+                Err(err) => {
+                    self.errors += 1;
+                    Err(err.into())
+                }
             }
         }
     }
