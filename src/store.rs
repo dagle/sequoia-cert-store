@@ -919,7 +919,12 @@ pub trait MergeCerts<'a: 'ra, 'ra> {
                 .merge_public(new.into_owned().into_cert()?)?;
             Ok(Cow::Owned(LazyCert::from(merged)))
         } else {
-            Ok(new)
+            if new.is_tsk() {
+                Ok(Cow::Owned(LazyCert::from(new.into_owned().into_cert()?
+                                             .strip_secret_key_material())))
+            } else {
+                Ok(new)
+            }
         }
     }
 }
@@ -1073,7 +1078,13 @@ impl<'a: 'ra, 'ra> MergeCerts<'a, 'ra> for MergePublicCollectStats {
             disk
         } else {
             self.new += 1;
-            return Ok(new);
+
+            if new.is_tsk() {
+                return Ok(Cow::Owned(LazyCert::from(
+                    new.into_owned().into_cert()?.strip_secret_key_material())))
+            } else {
+                return Ok(new);
+            }
         };
 
         let fpr = new.fingerprint();
