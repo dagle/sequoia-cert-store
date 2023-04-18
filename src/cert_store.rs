@@ -4,13 +4,16 @@ use std::path::Path;
 use anyhow::Context;
 
 use sequoia_openpgp as openpgp;
+use openpgp::cert::raw::RawCertParser;
 use openpgp::Fingerprint;
 use openpgp::KeyHandle;
-use openpgp::Result;
 use openpgp::packet::UserID;
+use openpgp::parse::Parse;
+use openpgp::Result;
 
 use crate::LazyCert;
 use crate::store;
+use store::Certs;
 use store::MergeCerts;
 use store::Store;
 use store::StoreError;
@@ -160,7 +163,51 @@ impl<'a> CertStore<'a> {
     pub fn add_keyring<P>(&mut self, path: P) -> Result<&mut Self>
         where P: AsRef<Path>
     {
-        let _path = path.as_ref();
+        self.add_keyrings(std::iter::once(path))?;
+        Ok(self)
+    }
+
+    /// Adds the specified keyrings to the CertStore.
+    ///
+    /// The keyrings are added in read-only mode, and their access
+    /// mode is set to `AccessMode::Always`.
+    pub fn add_keyrings<I, P>(&mut self, filenames: I) -> Result<&mut Self>
+    where P: AsRef<Path>,
+          I: IntoIterator<Item=P>,
+    {
+        let mut keyring = Certs::empty();
+        let mut error = None;
+        for filename in filenames {
+            let filename = filename.as_ref();
+
+            let f = std::fs::File::open(filename)
+                .with_context(|| format!("Open {:?}", filename))?;
+            let parser = RawCertParser::from_reader(f)
+                .with_context(|| format!("Parsing {:?}", filename))?;
+
+            for cert in parser {
+                match cert {
+                    Ok(cert) => {
+                        keyring.update(Cow::Owned(cert.into()))
+                            .expect("implementation doesn't fail");
+                    }
+                    Err(err) => {
+                        eprint!("Parsing certificate in {:?}: {}",
+                                filename, err);
+                        error = Some(err);
+                    }
+                }
+            }
+        }
+
+        if let Some(err) = error {
+            return Err(err).context("Parsing keyrings");
+        }
+
+        self.add_backend(
+            Box::new(keyring),
+            AccessMode::Always);
+
         Ok(self)
     }
 

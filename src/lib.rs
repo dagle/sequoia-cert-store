@@ -147,6 +147,7 @@ mod tests {
     use super::*;
 
     use std::borrow::Cow;
+    use std::path::PathBuf;
     use std::str;
 
     use anyhow::Context;
@@ -946,6 +947,23 @@ mod tests {
             .expect("valid");
         backend.prefetch_all();
         test_backend(backend);
+
+        Ok(())
+    }
+
+    #[test]
+    fn keyrings() -> Result<()> {
+        let mut cert_store = CertStore::empty();
+
+        let mut base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        base.push("tests");
+
+        cert_store.add_keyrings(
+            keyring::certs.iter().map(|c| {
+                PathBuf::from(&base).join(c.filename)
+            }))?;
+
+        test_backend(cert_store);
 
         Ok(())
     }
