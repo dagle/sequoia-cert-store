@@ -909,10 +909,10 @@ pub trait MergeCerts<'a: 'ra, 'ra> {
     /// [`Cert::merge_public`].  This means that any secret key
     /// material in `disk` is preserved, any secret key material in
     /// `new` is ignored, and unhashed subpacket areas are merged.
-    fn merge<'b, 'rb>(&mut self,
-                      new: Cow<'ra, LazyCert<'a>>,
-                      disk: Option<Cow<'rb, LazyCert<'b>>>)
-                      -> Result<Cow<'ra, LazyCert<'a>>>
+    fn merge_public<'b, 'rb>(&mut self,
+                             new: Cow<'ra, LazyCert<'a>>,
+                             disk: Option<Cow<'rb, LazyCert<'b>>>)
+        -> Result<Cow<'ra, LazyCert<'a>>>
     {
         if let Some(disk) = disk {
             let merged = disk.as_cert()?
@@ -1069,9 +1069,9 @@ impl<'a: 'ra, 'ra> MergeCerts<'a, 'ra> for MergePublicCollectStats {
     /// assert_eq!(stats.new, 1);
     /// # Ok(()) }
     /// ```
-    fn merge<'b, 'rb>(&mut self,
-                      new: Cow<'ra, LazyCert<'a>>,
-                      disk: Option<Cow<'rb, LazyCert<'b>>>)
+    fn merge_public<'b, 'rb>(&mut self,
+                             new: Cow<'ra, LazyCert<'a>>,
+                             disk: Option<Cow<'rb, LazyCert<'b>>>)
         -> Result<Cow<'ra, LazyCert<'a>>>
     {
         let disk = if let Some(disk) = disk {

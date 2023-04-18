@@ -318,7 +318,7 @@ impl<'a> StoreUpdate<'a> for CertD<'a> {
                 None
             };
 
-            let merged_ = merge_strategy.merge(cert, disk)
+            let merged_ = merge_strategy.merge_public(cert, disk)
                 .with_context(|| {
                     format!("Merging versions of {}", fpr)
                 })

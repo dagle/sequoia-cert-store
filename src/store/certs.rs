@@ -335,7 +335,7 @@ impl<'a> StoreUpdate<'a> for Certs<'a> {
 
                 let old = Cow::Borrowed(oe.get());
 
-                merged = merge_strategy.merge(cert, Some(old))
+                merged = merge_strategy.merge_public(cert, Some(old))
                     .with_context(|| {
                         format!("Merging two version of {}", fpr)
                     })?;
@@ -345,7 +345,7 @@ impl<'a> StoreUpdate<'a> for Certs<'a> {
             Entry::Vacant(ve) => {
                 t!("Inserting {}", fpr);
 
-                merged = merge_strategy.merge(cert, None)?;
+                merged = merge_strategy.merge_public(cert, None)?;
                 ve.insert(merged.to_owned().into_owned());
             }
         }
