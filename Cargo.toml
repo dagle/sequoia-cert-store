@@ -48,12 +48,12 @@ path = "src/lib.rs"
 
 [target.'cfg(not(windows))'.dev-dependencies]
 # Enables a crypto backend for the tests:
-sequoia-openpgp = { version = "1", default-features = false, features = ["crypto-nettle"]  }
+sequoia-openpgp = { version = "1", default-features = false, features = ["crypto-nettle", "__implicit-crypto-backend-for-tests"]  }
 
 [target.'cfg(windows)'.dev-dependencies]
 # Enables a crypto backend for the tests:
-sequoia-openpgp = { version = "1", default-features = false, features = ["crypto-cng"] }
+sequoia-openpgp = { version = "1", default-features = false, features = ["crypto-cng", "__implicit-crypto-backend-for-tests"] }
 
 [package.metadata.docs.rs]
 # Enables a crypto backend for the docs.rs generation:
-features = ["sequoia-openpgp/default"]
+features = ["sequoia-openpgp/default", "__implicit-crypto-backend-for-tests"]
