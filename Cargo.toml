@@ -22,7 +22,7 @@ anyhow = "1.0.18"
 #chrono = "0.4"
 #clap = { version = "4.0", features = [ "derive", "wrap_help" ] }
 crossbeam = "0.8.1"
-dirs = "4.0.0"
+dirs = "5"
 #enumber = "0.3"
 #lazy_static = "1.4.0"
 num_cpus = "1"
