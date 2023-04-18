@@ -25,7 +25,7 @@ to your crate's `Cargo.toml`:
 
 ```toml
 [dependencies]
-sequoia-cert-store = "0.1"
+sequoia-cert-store = "0.3"
 sequoia-openpgp = { version = "1.0.0", default-features = false }
 ```
 

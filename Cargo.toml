@@ -1,7 +1,7 @@
 [package]
 name = "sequoia-cert-store"
 description = "A certificate database interface."
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Neal H. Walfield <neal@pep.foundation>",
         "Justus Winter <justus@sequoia-pgp.org>"]
 homepage = "https://sequoia-pgp.org/"
