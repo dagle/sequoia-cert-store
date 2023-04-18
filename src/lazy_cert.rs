@@ -226,6 +226,18 @@ impl<'a> LazyCert<'a> {
         let cert = self.to_cert()?;
         cert.with_policy(policy, time)
     }
+
+    /// Returns whether the certificate contains any secret key
+    /// material.
+    pub fn is_tsk(&self) -> bool {
+        if let Some(cert) = self.cert.get() {
+            cert.is_tsk()
+        } else if let Some(raw) = &*self.raw.borrow() {
+            raw.keys().any(|key| key.has_secret())
+        } else {
+            unreachable!("cert or raw must be set")
+        }
+    }
 }
 
 impl<'a> From<Cert> for LazyCert<'a> {
