@@ -44,8 +44,9 @@ different cryptographic backend.
 
 `sequoia-openpgp` currently uses Nettle as its default cryptographic
 backend.  `sequoia-openpgp` also supports OpenSSL
-(`sequoia-openpgp/crypto-openssl`), Windows CNG
-(`sequoia-openpgp/crypto-cng`), and Rust Crypto
+(`sequoia-openpgp/crypto-openssl`), Botan
+(`sequoia-openpgp/crypto-botan`), Windows CNG
+(`sequoia-openpgp/crypto-cng`), Rust Crypto
 (`sequoia-openpgp/crypto-rust`).  For more information about building
 `sequoia-openpgp`, please refer to [`sequoia-openpgp`'s README].  This
 also includes information about the different backends' [build
