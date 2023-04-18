@@ -39,7 +39,7 @@ pub const BUSY_WAIT_TIME: std::time::Duration = std::time::Duration::from_secs(5
 // The location of the keys DB relative to the user's home directory.
 pub const KEYS_DB: &[ &str ] = &[ "keys.db" ];
 
-const TRACE: bool = true;
+use crate::TRACE;
 
 #[non_exhaustive]
 #[derive(thiserror::Error, Debug)]
