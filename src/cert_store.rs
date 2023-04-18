@@ -211,17 +211,6 @@ impl<'a> CertStore<'a> {
         Ok(self)
     }
 
-    /// Adds the specified keybox to the CertStore.
-    ///
-    /// The keybox is added in read-only mode, and its access mode is
-    /// set to `AccessMode::Always`.
-    pub fn add_keybox<P>(&mut self, path: P) -> Result<&mut Self>
-        where P: AsRef<Path>
-    {
-        let _path = path.as_ref();
-        Ok(self)
-    }
-
     /// Adds the specified keyserver to the CertStore.
     ///
     /// The keyserver is added in read-only mode, and its access mode
