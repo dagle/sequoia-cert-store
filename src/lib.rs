@@ -163,6 +163,7 @@ mod tests {
     use openpgp_cert_d as cert_d;
 
     use store::Certs;
+    use store::Pep;
     use store::StoreError;
     use store::UserIDQueryParams;
 
@@ -970,6 +971,29 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn pep() -> Result<()> {
+        use std::io::Read;
+
+        assert_eq!(keyring::certs.len(), 12);
+
+        let mut bytes = Vec::new();
+        for cert in keyring::certs.iter() {
+            let binary = cert.bytes();
+            let mut reader = openpgp::armor::Reader::from_bytes(
+                &binary,
+                openpgp::armor::ReaderMode::VeryTolerant);
+            reader.read_to_end(&mut bytes)
+                .expect(&format!("{}", cert.base));
+        }
+
+        let mut backend = Pep::from_bytes(&bytes).expect("valid");
+        backend.prefetch_all();
+        test_backend(backend);
+
+        Ok(())
+    }
+
     // Make sure that when we update a certificate, we are able to
     // find any new components and we are still able to find the old
     // components.
@@ -1103,6 +1127,13 @@ mod tests {
     #[test]
     fn test_store_update_certs() -> Result<()> {
         let certs = Certs::empty();
+        test_store_update(certs)
+    }
+
+    // Test StoreUpdate::update for Pep.
+    #[test]
+    fn test_store_update_pep() -> Result<()> {
+        let certs = Pep::empty()?;
         test_store_update(certs)
     }
 }

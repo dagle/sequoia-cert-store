@@ -12,10 +12,11 @@ Certificate Directory].  `Certs` manages a bunch of certificates
 in-memory.  It can be loaded with certificates from a keyring, a
 keybox, a database, etc.  It can also be used as the basis for a new
 backend, which actually writes changes back to the underlying store.
-Finally, there is a key server backend, which can fetch certificates
-via HKPS and WKD.
+`Pep` provides access to a [pEp] certificate store.  Finally, there is a
+key server backend, which can fetch certificates via HKPS and WKD.
 
   [OpenPGP Certificate Directory]: https://crates.io/crates/openpgp-cert-d
+  [pEp]: https://gitea.pep.foundation/pEp.foundation/pEpEngine
 
 ## Usage
 

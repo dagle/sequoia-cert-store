@@ -23,6 +23,9 @@ pub use certs::Certs;
 pub mod keyserver;
 pub use keyserver::KeyServer;
 
+pub mod pep;
+pub use pep::Pep;
+
 use super::TRACE;
 
 use crate::LazyCert;
