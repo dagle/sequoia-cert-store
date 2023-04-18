@@ -248,7 +248,9 @@ mod tests {
                     Err(err) => {
                         match err.downcast_ref::<StoreError>() {
                             Some(StoreError::NotFound(_)) => (),
-                            _ => panic!("Unexpected failure: {}", err),
+                            _ => panic!("Expected StoreError::NotFound, \
+                                         got: {}",
+                                        err),
                         }
                     },
                 }
@@ -300,8 +302,8 @@ mod tests {
                     &KeyHandle::from(sk.fingerprint()))
                     .expect("present");
                 assert!(got.into_iter().any(|c| c.fingerprint() == fpr),
-                        "{}, lookup_by_key, with fingerprint, subkey",
-                        handle.base);
+                        "{}, lookup_by_key({}), with fingerprint, subkey",
+                        handle.base, sk.fingerprint());
             }
 
 
