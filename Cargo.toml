@@ -56,4 +56,4 @@ sequoia-openpgp = { version = "1", default-features = false, features = ["crypto
 
 [package.metadata.docs.rs]
 # Enables a crypto backend for the docs.rs generation:
-features = ["sequoia-openpgp/default", "__implicit-crypto-backend-for-tests"]
+features = ["sequoia-openpgp/default"]
