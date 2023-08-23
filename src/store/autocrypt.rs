@@ -8,19 +8,17 @@ use std::time::SystemTime;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
+use openpgp::cert::amalgamation::ValidateAmalgamation;
 use openpgp::cert::CertBuilder;
 use openpgp::cert::CipherSuite;
-use openpgp::cert::amalgamation::ValidateAmalgamation;
 use openpgp::crypto::Password;
 use openpgp::packet::Signature;
-use openpgp::types::KeyFlags;
 use openpgp::policy::Policy;
+use openpgp::serialize::Serialize;
+use openpgp::types::KeyFlags;
 use rusqlite::{params, CachedStatement, Connection, OpenFlags, Row};
 
-use openpgp::{
-    packet::UserID, parse::Parse, Cert,
-    Fingerprint, KeyHandle, KeyID,
-};
+use openpgp::{packet::UserID, parse::Parse, Cert, Fingerprint, KeyHandle, KeyID};
 use sequoia_autocrypt::AutocryptHeader;
 use sequoia_autocrypt::AutocryptHeaderType;
 use sequoia_autocrypt::AutocryptSetupMessage;
@@ -84,7 +82,7 @@ impl Prefer {
     pub fn encrypt(&self) -> bool {
         match self {
             Prefer::Mutual => true,
-            Prefer::Nopreference => false
+            Prefer::Nopreference => false,
         }
     }
 }
@@ -124,7 +122,7 @@ impl Peer {
         mail: &str,
         account: &str,
         now: DateTime<Utc>,
-        key: & Cert,
+        key: &Cert,
         gossip: bool,
         prefer: Prefer,
     ) -> Self {
@@ -208,16 +206,31 @@ impl Sum for UIRecommendation {
         let mut last = Self::Encrypt;
         for entry in iter {
             last = match (last, entry) {
-                (UIRecommendation::Disable,  _) => UIRecommendation::Disable,
-                (UIRecommendation::Discourage, UIRecommendation::Disable) => UIRecommendation::Disable,
-                (UIRecommendation::Discourage, UIRecommendation::Discourage) => 
-                    UIRecommendation::Discourage,
-                (UIRecommendation::Discourage, UIRecommendation::Available) => UIRecommendation::Discourage,
-                (UIRecommendation::Discourage, UIRecommendation::Encrypt) => UIRecommendation::Discourage,
-                (UIRecommendation::Available, UIRecommendation::Disable) => UIRecommendation::Disable,
-                (UIRecommendation::Available, UIRecommendation::Discourage) => UIRecommendation::Discourage,
-                (UIRecommendation::Available, UIRecommendation::Available) => UIRecommendation::Available,
-                (UIRecommendation::Available, UIRecommendation::Encrypt) => UIRecommendation::Available,
+                (UIRecommendation::Disable, _) => UIRecommendation::Disable,
+                (UIRecommendation::Discourage, UIRecommendation::Disable) => {
+                    UIRecommendation::Disable
+                }
+                (UIRecommendation::Discourage, UIRecommendation::Discourage) => {
+                    UIRecommendation::Discourage
+                }
+                (UIRecommendation::Discourage, UIRecommendation::Available) => {
+                    UIRecommendation::Discourage
+                }
+                (UIRecommendation::Discourage, UIRecommendation::Encrypt) => {
+                    UIRecommendation::Discourage
+                }
+                (UIRecommendation::Available, UIRecommendation::Disable) => {
+                    UIRecommendation::Disable
+                }
+                (UIRecommendation::Available, UIRecommendation::Discourage) => {
+                    UIRecommendation::Discourage
+                }
+                (UIRecommendation::Available, UIRecommendation::Available) => {
+                    UIRecommendation::Available
+                }
+                (UIRecommendation::Available, UIRecommendation::Encrypt) => {
+                    UIRecommendation::Available
+                }
                 (UIRecommendation::Encrypt, r @ _) => r,
             }
         }
@@ -254,13 +267,13 @@ impl UIRecommendation {
     pub fn encryptable(&self) -> bool {
         match self {
             UIRecommendation::Disable => false,
-            _ => true
+            _ => true,
         }
     }
     pub fn preferable(&self) -> bool {
         match self {
             Self::Disable | Self::Discourage => false,
-            _ => true
+            _ => true,
         }
     }
 }
@@ -550,9 +563,8 @@ impl Autocrypt {
                     FOREIGN KEY(account) 
                             REFERENCES autocrypt_account(address),
                         ON DELETE CASCADE
-                );"
-                // CREATE INDEX IF NOT EXISTS peer_index
-                //     ON peer (address COLLATE EMAIL, primary_key)"
+                );" // CREATE INDEX IF NOT EXISTS peer_index
+                    //     ON peer (address COLLATE EMAIL, primary_key)"
             ),
             InitCannotOpenDB,
             format!("Creating peer table ('{}')", keys_db.display())
@@ -572,8 +584,7 @@ impl Autocrypt {
     // keyid is the start of the fingerprint, not the end.
     sql_stmt!(
         cert_find_by_keyid_stmt,
-        "SELECT tpk, secret FROM keys WHERE primary_key like '%' || ?"
-        // "SELECT tpk, secret FROM keys WHERE primary_key like '%?%'"
+        "SELECT tpk, secret FROM keys WHERE primary_key like '%' || ?" // "SELECT tpk, secret FROM keys WHERE primary_key like '%?%'"
     );
 
     // Returns a prepared statement for finding a key by primary key
@@ -787,6 +798,11 @@ impl Autocrypt {
         Ok(r)
     }
     fn account_load(row: &Row) -> rusqlite::Result<Account> {
+        todo!()
+    }
+
+    fn peer_load(row: &Row) -> rusqlite::Result<Peer> {
+        todo!()
     }
 
     fn account(&self, account_email: &str) -> Result<Account> {
@@ -794,55 +810,125 @@ impl Autocrypt {
 
         let mut stmt = Self::get_account_stmt(&self.conn)?;
 
-        let rows = wrap_err!(
+        let mut rows = wrap_err!(
             stmt.query_map([account_email], Self::account_load),
             UnknownDbError,
             "executing query"
         )?;
 
-        let mut results: Vec<_> = Vec::new();
-        for row in rows {
-            // let (keydata, _private) = wrap_err!(row, UnknownError, "parsing result")?;
-            // match Cert::from_bytes(&keydata) {
-            //     Ok(cert) => results.push(Cow::Owned(LazyCert::from(cert))),
-            //     Err(err) => {
-            //         t!(
-            //             "Warning: unable to parse a certificate: {}\n{:?}",
-            //             err,
-            //             String::from_utf8(keydata)
-            //         );
-            //     }
-            // }
-        }
-
-        if results.is_empty() {
-            Err(anyhow::Error::from($err))
+        if let Some(row) = rows.next() {
+            let account = wrap_err!(row, UnknownError, "parsing account")?;
+            Ok(account)
         } else {
-            Ok(results)
+            Err(anyhow::Error::from(StoreError::NoMatches(format!(
+                "No account for email: {}",
+                account_email
+            ))))
         }
     }
     fn set_account(&self, acc: &Account) -> Result<()> {
-        todo!()
+        wrap_err!(
+            Self::account_save_insert_stmt(&self.conn)?.execute(params![acc.mail]),
+            UnknownDbError,
+            "Trying to set account"
+        )?;
+        Ok(())
     }
 
     fn peer(&self, account_email: &str, peer_mail: &str) -> Result<Peer> {
-        todo!()
+        tracer!(TRACE, "Autocrypt::peer");
+
+        let mut stmt = Self::get_peer_stmt(&self.conn)?;
+
+        let mut rows = wrap_err!(
+            stmt.query_map([account_email, peer_mail], Self::peer_load),
+            UnknownDbError,
+            "executing query"
+        )?;
+
+        if let Some(row) = rows.next() {
+            let peer = wrap_err!(row, UnknownError, "parsing account")?;
+            Ok(peer)
+        } else {
+            Err(anyhow::Error::from(StoreError::NoMatches(format!(
+                "No account for email: {}",
+                account_email
+            ))))
+        }
     }
 
     fn set_peer(&self, peer: &Peer) -> Result<()> {
-        todo!()
+        wrap_err!(
+            Self::account_save_insert_stmt(&self.conn)?.execute(params![peer.mail]),
+            UnknownDbError,
+            "Trying to set account"
+        )?;
+        Ok(())
     }
 
     fn private_key(&self, account_email: &str) -> Result<Cert> {
-        todo!()
+        tracer!(TRACE, "Autocrypt::private_key");
+
+        // TODO: real stmt
+        let mut stmt = Self::get_peer_stmt(&self.conn)?;
+
+        let mut rows = wrap_err!(
+            stmt.query_map([account_email], Self::key_load),
+            UnknownDbError,
+            "executing query"
+        )?;
+
+        if let Some(row) = rows.next() {
+            let (keydata, _) = wrap_err!(row, UnknownError, "parsing cert")?;
+            match Cert::from_bytes(&keydata) {
+                Ok(cert) => Ok(cert),
+                Err(err) => Err(err),
+            }
+        } else {
+            Err(anyhow::Error::from(StoreError::NoMatches(format!(
+                "No account for email: {}",
+                account_email
+            ))))
+        }
     }
 
     fn peer_key(&self, peer: &Fingerprint) -> Result<Cert> {
-        todo!()
+        tracer!(TRACE, "Autocrypt::peer_key");
+
+        // TODO: real stmt
+        let mut stmt = Self::get_peer_stmt(&self.conn)?;
+
+        let mut rows = wrap_err!(
+            stmt.query_map([peer.to_hex()], Self::key_load),
+            UnknownDbError,
+            "executing query"
+        )?;
+
+        if let Some(row) = rows.next() {
+            let (keydata, _) = wrap_err!(row, UnknownError, "parsing cert")?;
+            match Cert::from_bytes(&keydata) {
+                Ok(cert) => Ok(cert),
+                Err(err) => Err(err),
+            }
+        } else {
+            Err(anyhow::Error::from(StoreError::NoMatches(format!(
+                "No peer key for fpr: {}",
+                peer.to_hex()
+            ))))
+        }
     }
-    
+
     fn insert_cert(&self, account_email: &str, cert: &Cert) -> Result<()> {
-        todo!()
+        tracer!(TRACE, "Autocrypt::insert_cert");
+
+        let mut output = Vec::new();
+        cert.as_tsk().serialize(&mut output)?;
+        wrap_err!(
+            Self::account_save_insert_stmt(&self.conn)?.execute(params![account_email, output]),
+            UnknownDbError,
+            "Trying to set account"
+        )?;
+        Ok(())
     }
 
     /// Returns the matching TSK.
@@ -855,9 +941,12 @@ impl Autocrypt {
         let mut stmt = Self::tsk_find_with_account_stmt(&self.conn)?;
         t!("({})", account_email);
 
-        cert_query!(stmt, [account_email], StoreError::NoMatches(account_email.to_owned()))
+        cert_query!(
+            stmt,
+            [account_email],
+            StoreError::NoMatches(account_email.to_owned())
+        )
     }
-
 
     /// Returns the matching TSK.
     ///
@@ -869,8 +958,10 @@ impl Autocrypt {
         let account = self.account(account_email)?;
 
         if account.fpr.is_none() {
-            return Err(anyhow::Error::from(
-                    StoreError::NoMatches(format!("No primary key for email: {}", account_email))));
+            return Err(anyhow::Error::from(StoreError::NoMatches(format!(
+                "No primary key for email: {}",
+                account_email
+            ))));
         }
 
         let fpr = account.fpr.unwrap();
@@ -888,7 +979,6 @@ impl Autocrypt {
             .ok_or_else(|| StoreError::NotFound(KeyHandle::from(fpr)))?;
         Ok(r)
     }
-
 
     /// Returns the matching TSK.
     ///
@@ -1098,9 +1188,8 @@ impl Autocrypt {
         account_email: &str,
         peer_mail: &str,
         effective_date: DateTime<Utc>,
-        user_agent: &str
+        user_agent: &str,
     ) -> Result<bool> {
-
         if effective_date > Utc::now() {
             return Err(anyhow::anyhow!("Date is in the future"));
         }
@@ -1108,14 +1197,10 @@ impl Autocrypt {
         let mut peer = self.peer(account_email, peer_mail);
 
         match peer {
-            Err(err) => {
-                match err.downcast_ref::<Error>() {
-                    Some(CannotFindPeerKey) => {
-                        Ok(false)
-                    }
-                    _ => return Err(err)
-                }
-            }
+            Err(err) => match err.downcast_ref::<Error>() {
+                Some(CannotFindPeerKey) => Ok(false),
+                _ => return Err(err),
+            },
             Ok(ref mut peer) => {
                 if peer.last_seen < effective_date {
                     peer.last_seen = effective_date;
@@ -1128,11 +1213,11 @@ impl Autocrypt {
                 let timestamp = if let Some(ts) = peer.timestamp {
                     ts
                 } else {
-                    return Ok(false)
+                    return Ok(false);
                 };
-                if peer.counting_since < timestamp && 
-                    peer.counting_since + Duration::days(35) < effective_date {
-
+                if peer.counting_since < timestamp
+                    && peer.counting_since + Duration::days(35) < effective_date
+                {
                     peer.count_no_ach = 1;
                     peer.count_have_ach = 0;
                     peer.counting_since = peer.last_seen;
@@ -1162,23 +1247,28 @@ impl Autocrypt {
     ) -> Result<bool> {
         if account_email == peer_mail {
             return Err(anyhow::anyhow!(
-                "Setting a peer for your private key isn't allowed" 
+                "Setting a peer for your private key isn't allowed"
             ));
         }
 
         let peer = self.peer(account_email, peer_mail);
 
         match peer {
-            Err(err) => {
-                match err.downcast_ref::<Error>() {
-                    Some(CannotFindPeerKey) => {
-                        let peer = Peer::new(peer_mail, account_email, effective_date, cert, gossip, prefer);
-                        self.set_peer(&peer)?;
-                        Ok(true)
-                    }
-                    _ => return Err(err)
+            Err(err) => match err.downcast_ref::<Error>() {
+                Some(CannotFindPeerKey) => {
+                    let peer = Peer::new(
+                        peer_mail,
+                        account_email,
+                        effective_date,
+                        cert,
+                        gossip,
+                        prefer,
+                    );
+                    self.set_peer(&peer)?;
+                    Ok(true)
                 }
-            }
+                _ => return Err(err),
+            },
             Ok(mut peer) => {
                 if effective_date <= peer.last_seen {
                     return Ok(false);
@@ -1187,18 +1277,15 @@ impl Autocrypt {
                 peer.last_seen = effective_date;
 
                 if !gossip {
-                    if peer.timestamp.is_none() || 
-                        effective_date > peer.timestamp.unwrap()
-                    {
+                    if peer.timestamp.is_none() || effective_date > peer.timestamp.unwrap() {
                         peer.timestamp = Some(effective_date);
                         peer.cert_fpr = Some(cert.fingerprint());
 
                         peer.account = account_email.to_owned();
                         peer.prefer = prefer;
-
                     }
-                } else if peer.gossip_timestamp.is_none() ||
-                    effective_date > peer.gossip_timestamp.unwrap()
+                } else if peer.gossip_timestamp.is_none()
+                    || effective_date > peer.gossip_timestamp.unwrap()
                 {
                     peer.gossip_timestamp = Some(effective_date);
                     peer.gossip_fpr = Some(cert.fingerprint());
@@ -1278,7 +1365,6 @@ impl Autocrypt {
         peer_mail: &str,
         policy: &dyn Policy,
     ) -> Result<AutocryptHeader> {
-
         let peer = self.peer(account_email, peer_mail)?;
 
         let mut header = if let Some(fpr) = peer.cert_fpr {
@@ -1288,8 +1374,9 @@ impl Autocrypt {
             let cert = self.peer_key(&fpr)?;
             AutocryptHeader::new_sender(policy, &cert, &peer.mail, None)
         } else {
-            return Err(anyhow::Error::from(
-                    StoreError::NoMatches("No primary or gossip key".to_string())));
+            return Err(anyhow::Error::from(StoreError::NoMatches(
+                "No primary or gossip key".to_string(),
+            )));
         }?;
         header.header_type = AutocryptHeaderType::Gossip;
         Ok(header)
@@ -1322,10 +1409,8 @@ impl Autocrypt {
                 // We expect the user to know what he/she is doing
                 account.fpr = Some(cert.fingerprint());
                 account
-            },
-            Err(_) => {
-                Account::new(account_email, Some(cert.fingerprint()))
             }
+            Err(_) => Account::new(account_email, Some(cert.fingerprint())),
         };
         self.set_account(&account)?;
         self.insert_cert(account_email, &cert)
