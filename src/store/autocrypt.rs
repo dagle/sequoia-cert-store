@@ -1,37 +1,37 @@
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::iter::Sum;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::SystemTime;
-
-use anyhow::Context;
 
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
 use openpgp::cert::CertBuilder;
 use openpgp::cert::CipherSuite;
+use openpgp::cert::amalgamation::ValidateAmalgamation;
+use openpgp::crypto::Password;
 use openpgp::packet::Signature;
 use openpgp::types::KeyFlags;
 use openpgp::policy::Policy;
-use rusqlite::{params, CachedStatement, Connection, OpenFlags, OptionalExtension, Row};
+use rusqlite::{params, CachedStatement, Connection, OpenFlags, Row};
 
 use openpgp::{
-    cert::raw::RawCertParser, packet::UserID, parse::Parse, serialize::Serialize, Cert,
+    packet::UserID, parse::Parse, Cert,
     Fingerprint, KeyHandle, KeyID,
 };
 use sequoia_autocrypt::AutocryptHeader;
 use sequoia_autocrypt::AutocryptHeaderType;
 use sequoia_autocrypt::AutocryptSetupMessage;
+use sequoia_autocrypt::AutocryptSetupMessageParser;
 use sequoia_openpgp as openpgp;
 
-use crate::store::MergeCerts;
 use crate::store::StoreError;
 use crate::store::UserIDQueryParams;
 use crate::LazyCert;
 use crate::Result;
 use crate::Store;
-use crate::StoreUpdate;
 
 // Maximum busy wait time.
 pub const BUSY_WAIT_TIME: std::time::Duration = std::time::Duration::from_secs(5);
@@ -71,6 +71,24 @@ pub enum Prefer {
     Nopreference,
 }
 
+impl From<Prefer> for Option<&str> {
+    fn from(value: Prefer) -> Self {
+        match value {
+            Prefer::Mutual => Some("mutual"),
+            Prefer::Nopreference => Some("nopreference"),
+        }
+    }
+}
+
+impl Prefer {
+    pub fn encrypt(&self) -> bool {
+        match self {
+            Prefer::Mutual => true,
+            Prefer::Nopreference => false
+        }
+    }
+}
+
 pub struct Peer {
     pub mail: String,
     pub account: String,
@@ -83,7 +101,23 @@ pub struct Peer {
     pub counting_since: DateTime<Utc>,
     pub count_have_ach: u32,
     pub count_no_ach: u32,
+    pub bad_user_agent: Option<String>,
 }
+
+// fn valid_cert(cert: &Option<Cow<Cert>>, policy: &dyn Policy) -> bool {
+//     if let Some(ref cert) = cert {
+//         cert.keys()
+//             .with_policy(policy, None)
+//             .alive()
+//             .revoked(false)
+//             .supported()
+//             .for_transport_encryption()
+//             .next()
+//             .is_some()
+//     } else {
+//         false
+//     }
+// }
 
 impl Peer {
     pub fn new(
@@ -107,6 +141,7 @@ impl Peer {
                 counting_since: now,
                 count_have_ach: 0,
                 count_no_ach: 0,
+                bad_user_agent: None,
             }
         } else {
             Peer {
@@ -121,39 +156,32 @@ impl Peer {
                 counting_since: now,
                 count_have_ach: 0,
                 count_no_ach: 0,
+                bad_user_agent: None,
             }
         }
     }
 
-    // // Determine if encryption is possible
-    // pub(crate) fn can_encrypt(&self, policy: &dyn Policy) -> bool {
-    //     valid_cert(&self.cert, policy) || valid_cert(&self.gossip_cert, policy)
-    // }
-    //
-    // pub(crate) fn preliminary_recommend(&self, policy: &dyn Policy) -> UIRecommendation {
-    //     if !self.can_encrypt(policy) {
-    //         return UIRecommendation::Disable;
-    //     }
-    //     if self.cert.is_some() {
-    //         let stale = self.timestamp + Duration::days(35);
-    //         if stale.cmp(&self.last_seen) == Ordering::Less {
-    //             return UIRecommendation::Discourage;
-    //         }
-    //         return UIRecommendation::Available;
-    //     }
-    //     if self.gossip_cert.is_some() {
-    //         return UIRecommendation::Discourage;
-    //     }
-    //     UIRecommendation::Disable
-    // }
-    //
-    // pub(crate) fn get_recipient<D: SqlDriver>(&self, db: &D, policy: &dyn Policy) -> Result<Recipient> {
-    //     encrypt_key!(db, self.cert_fpr, policy);
-    //     encrypt_key!(db, self.gossip_fpr, policy);
-    //     Err(anyhow::anyhow!(
-    //         "Couldn't find any key for transport encryption for peer"
-    //     ))
-    // }
+    pub(crate) fn can_encrypt(&self, policy: &dyn Policy) -> bool {
+        todo!()
+        // valid_cert(&self.cert, policy) || valid_cert(&self.gossip_cert, policy)
+    }
+
+    pub(crate) fn preliminary_recommend(&self, policy: &dyn Policy) -> UIRecommendation {
+        if !self.can_encrypt(policy) {
+            return UIRecommendation::Disable;
+        }
+        if self.cert_fpr.is_some() {
+            let stale = self.timestamp.unwrap() + Duration::days(35);
+            if stale.cmp(&self.last_seen) == Ordering::Less {
+                return UIRecommendation::Discourage;
+            }
+            return UIRecommendation::Available;
+        }
+        if self.gossip_fpr.is_some() {
+            return UIRecommendation::Discourage;
+        }
+        UIRecommendation::Disable
+    }
 }
 
 /// TODO:UIRecommendation should have a string
@@ -173,35 +201,67 @@ pub enum UIRecommendation {
     Encrypt,
 }
 
+// TODO:
+// Take the most severe errors and add them together.
 impl Sum for UIRecommendation {
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        let mut last = Self::Encrypt;
         for entry in iter {
-            if entry == Self::Disable {
-                return Self::Disable;
-            }
-            if entry == Self::Discourage {
-                return Self::Discourage;
-            }
-            if entry != Self::Encrypt {
-                return Self::Available;
+            last = match (last, entry) {
+                (UIRecommendation::Disable,  _) => UIRecommendation::Disable,
+                (UIRecommendation::Discourage, UIRecommendation::Disable) => UIRecommendation::Disable,
+                (UIRecommendation::Discourage, UIRecommendation::Discourage) => 
+                    UIRecommendation::Discourage,
+                (UIRecommendation::Discourage, UIRecommendation::Available) => UIRecommendation::Discourage,
+                (UIRecommendation::Discourage, UIRecommendation::Encrypt) => UIRecommendation::Discourage,
+                (UIRecommendation::Available, UIRecommendation::Disable) => UIRecommendation::Disable,
+                (UIRecommendation::Available, UIRecommendation::Discourage) => UIRecommendation::Discourage,
+                (UIRecommendation::Available, UIRecommendation::Available) => UIRecommendation::Available,
+                (UIRecommendation::Available, UIRecommendation::Encrypt) => UIRecommendation::Available,
+                (UIRecommendation::Encrypt, r @ _) => r,
             }
         }
-        Self::Encrypt
+        last
     }
+    // fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+    //     let mut last = Self::Encrypt;
+    //     for entry in iter {
+    //         last = match (last, entry) {
+    //             (UIRecommendation::Disable(s1), UIRecommendation::Disable(s2)) => {
+    //                 UIRecommendation::Disable(s1)
+    //             }
+    //             (UIRecommendation::Disable(_), _) => last,
+    //             (UIRecommendation::Discourage(_), UIRecommendation::Disable(_)) => entry,
+    //             (UIRecommendation::Discourage(s1), UIRecommendation::Discourage(s2)) => {
+    //                 UIRecommendation::Discourage(s1)
+    //             }
+    //             (UIRecommendation::Discourage(_), UIRecommendation::Available(_)) => last,
+    //             (UIRecommendation::Discourage(_), UIRecommendation::Encrypt) => last,
+    //             (UIRecommendation::Available(_), UIRecommendation::Disable(_)) => entry,
+    //             (UIRecommendation::Available(_), UIRecommendation::Discourage(_)) => entry,
+    //             (UIRecommendation::Available(s1), UIRecommendation::Available(s2)) => {
+    //                 UIRecommendation::Available(s1)
+    //             }
+    //             (UIRecommendation::Available(_), UIRecommendation::Encrypt) => last,
+    //             (UIRecommendation::Encrypt, _) => entry,
+    //         }
+    //     }
+    //     last
+    // }
 }
 
 impl UIRecommendation {
     pub fn encryptable(&self) -> bool {
-        if *self == Self::Disable {
-            return false;
+        match self {
+            UIRecommendation::Disable => false,
+            _ => true
         }
-        true
     }
     pub fn preferable(&self) -> bool {
-        if *self == Self::Disable || *self == Self::Discourage {
-            return false;
+        match self {
+            Self::Disable | Self::Discourage => false,
+            _ => true
         }
-        true
     }
 }
 
@@ -233,7 +293,7 @@ pub enum Error {
     CannotFindAccountKey(#[source] anyhow::Error, String),
 }
 
-// Transforms an error from some error type to the pep::Error.
+// Transforms an error from some error type to the autocrypt::Error.
 macro_rules! wrap_err {
     ($e:expr, $err:ident, $msg:expr) => {
         $e.map_err(|err| {
@@ -356,40 +416,6 @@ impl Autocrypt {
     pub fn empty() -> Result<Self> {
         Self::init_in_memory()
     }
-
-    // /// Returns a new `Autocrypt`.
-    // ///
-    // /// This uses an in-memory sqlite database, and loads it with the
-    // /// keyring.
-    // pub fn from_bytes<'a>(bytes: &'a [u8]) -> Result<Self> {
-    //     tracer!(TRACE, "Pep::from_bytes");
-    //
-    //     let raw_certs = RawCertParser::from_bytes(bytes)?.filter_map(|c| match c {
-    //         Ok(c) => Some(c),
-    //         Err(err) => {
-    //             t!("Parsing raw certificate: {}", err);
-    //             None
-    //         }
-    //     });
-    //     Self::from_certs(raw_certs)
-    // }
-
-    // /// Returns a new `Autocrypt`.
-    // ///
-    // /// This uses an in-memory sqlite database, and loads it with the
-    // /// specified certificates.
-    // pub fn from_certs<'a, I>(certs: impl IntoIterator<Item = I>) -> Result<Self>
-    // where
-    //     I: Into<LazyCert<'a>>,
-    // {
-    //     let mut r = Self::init_in_memory()?;
-    //     for cert in certs {
-    //         r.update(Cow::Owned(cert.into()))
-    //             .expect("implementation doesn't fail")
-    //     }
-    //
-    //     Ok(r)
-    // }
 
     /// Initializes an in-memory key store.
     ///
@@ -600,21 +626,21 @@ impl Autocrypt {
             WHERE address == ? and private == 1"
     );
 
-    sql_stmt!(
-        cert_find_by_peer_stmt,
-        "SELECT tpk, secret FROM peer
-            LEFT JOIN keys
-                ON peer.primary_key == keys.primary_key
-            WHERE address == ? and account == ?"
-    );
+    // sql_stmt!(
+    //     cert_find_by_peer_stmt,
+    //     "SELECT tpk, secret FROM peer
+    //         LEFT JOIN keys
+    //             ON peer.primary_key == keys.primary_key
+    //         WHERE address == ? and account == ?"
+    // );
 
-    sql_stmt!(
-        cert_find_by_peer_gossip_stmt,
-        "SELECT tpk, secret FROM peer
-            LEFT JOIN keys
-                ON peer.gossip_primary_key == keys.primary_key
-            WHERE address == ? and account == ?"
-    );
+    // sql_stmt!(
+    //     cert_find_by_peer_gossip_stmt,
+    //     "SELECT tpk, secret FROM peer
+    //         LEFT JOIN keys
+    //             ON peer.gossip_primary_key == keys.primary_key
+    //         WHERE address == ? and account == ?"
+    // );
 
     sql_stmt!(
         get_account_stmt,
@@ -709,6 +735,7 @@ impl Autocrypt {
 
     sql_stmt!(delete_account_stmt, "DELETE FROM account where address = ?");
 
+    sql_stmt!(delete_peer_stmt, "DELETE FROM account where address = ?");
     // Compares two User IDs.
     //
     // Extracts the email address or URI stored in each User ID and
@@ -756,321 +783,104 @@ impl Autocrypt {
         let r = r
             .into_iter()
             .next()
-            .ok_or_else(|| account_email.to_owned())?;
+            .ok_or_else(|| StoreError::NoMatches(account_email.to_owned()))?;
         Ok(r)
     }
+    fn account_load(row: &Row) -> rusqlite::Result<Account> {
+    }
 
-    fn account(&self, account_mail: &str) -> Result<Account> {
-        todo!()
+    fn account(&self, account_email: &str) -> Result<Account> {
+        tracer!(TRACE, "Autocrypt::account");
+
+        let mut stmt = Self::get_account_stmt(&self.conn)?;
+
+        let rows = wrap_err!(
+            stmt.query_map([account_email], Self::account_load),
+            UnknownDbError,
+            "executing query"
+        )?;
+
+        let mut results: Vec<_> = Vec::new();
+        for row in rows {
+            // let (keydata, _private) = wrap_err!(row, UnknownError, "parsing result")?;
+            // match Cert::from_bytes(&keydata) {
+            //     Ok(cert) => results.push(Cow::Owned(LazyCert::from(cert))),
+            //     Err(err) => {
+            //         t!(
+            //             "Warning: unable to parse a certificate: {}\n{:?}",
+            //             err,
+            //             String::from_utf8(keydata)
+            //         );
+            //     }
+            // }
+        }
+
+        if results.is_empty() {
+            Err(anyhow::Error::from($err))
+        } else {
+            Ok(results)
+        }
     }
     fn set_account(&self, acc: &Account) -> Result<()> {
         todo!()
     }
 
-    fn peer(&self, account_mail: &str, peer_mail: &str) -> Result<Peer> {
+    fn peer(&self, account_email: &str, peer_mail: &str) -> Result<Peer> {
         todo!()
     }
 
-    fn set_peer(&self, peer: &Peer) {
+    fn set_peer(&self, peer: &Peer) -> Result<()> {
         todo!()
     }
 
-    fn private_key(&self, account_mail: &str) -> Result<Cert> {
+    fn private_key(&self, account_email: &str) -> Result<Cert> {
         todo!()
     }
 
-    pub fn set_prefer(&self, account_mail: &str, prefer: Prefer) -> Result<()> {
-        let mut account = self.account(account_mail)?;
-        account.prefer = prefer;
-        self.set_account(&account)
+    fn peer_key(&self, peer: &Fingerprint) -> Result<Cert> {
+        todo!()
+    }
+    
+    fn insert_cert(&self, account_email: &str, cert: &Cert) -> Result<()> {
+        todo!()
     }
 
-    /// Get the prefer setting for an account
-    pub fn prefer(&self, account_mail: &str) -> Result<Prefer> {
-        let account = self.conn.account(account_mail)?;
-        Ok(account.prefer)
+    /// Returns the matching TSK.
+    ///
+    /// Like [`Store::lookup_by_key`], but only returns certificates
+    /// with private key material.
+    pub fn tsk_lookup_by_account(&self, account_email: &str) -> Result<Vec<Cow<LazyCert>>> {
+        tracer!(TRACE, "Autocrypt::tsk_lookup_by_account");
+
+        let mut stmt = Self::tsk_find_with_account_stmt(&self.conn)?;
+        t!("({})", account_email);
+
+        cert_query!(stmt, [account_email], StoreError::NoMatches(account_email.to_owned()))
     }
 
-    /// Set enable for an account
-    /// These are just internal settings and doesn't effect runtime.
-    /// Functions such as recommend does not check the enable and it's up
-    /// the user to do so.
-    pub fn set_enable(&self, account_mail: &str, enable: bool) -> Result<()> {
-        tracer!(TRACE, "Autocrypt::set_enable");
-
-        let mut account = self.account(account_mail)?;
-        account.enable = enable;
-        self.set_account(&account)
-    }
-
-    /// Get enable for an account
-    pub fn enable(&self, account_mail: &str) -> Result<bool> {
-        let account = self.account(account_mail)?;
-        Ok(account.enable)
-    }
-
-    fn gen_cert(&self, account_mail: &str, now: SystemTime) -> Result<(Cert, Signature)> {
-        let mut builder = CertBuilder::new();
-        builder = builder.add_userid(account_mail);
-        builder = builder.set_creation_time(now);
-
-        builder = builder.set_validity_period(None);
-
-        // builder = builder.set_validity_period(
-        //     Some(Duration::new(3 * SECONDS_IN_YEAR, 0))),
-
-        builder = builder.set_cipher_suite(CipherSuite::Cv25519);
-
-        builder = builder.add_signing_subkey();
-        // We set storage_encryption so we can store drafts
-        builder = builder.add_subkey(
-            KeyFlags::empty()
-                .set_transport_encryption()
-                .set_storage_encryption(),
-            None,
-            None,
-        );
-
-        builder = builder.set_password(self.password.clone());
-
-        builder.generate()
-    }
-
-    /// Update the private key the account for our mail. If the current key is
-    /// is still usable, no update is done.
-    pub fn update_private_key(&self, policy: &dyn Policy, account_mail: &str) -> Result<()> {
-        let now = SystemTime::now();
-
-        let mut account = if let Ok(mut account) = self.account(account_mail) {
-            let key = self.private_key(account_mail)?;
-            if key.primary_key().with_policy(policy, now).is_ok() {
-                return Ok(());
-            }
-            account
-        } else {
-            let account = Account::new(account_mail, None);
-            self.set_account(&account)?;
-            account
-        };
-
-        let (cert, _) = self.gen_cert(account_mail, now)?;
-        account.fpr = Some(cert.fingerprint());
-        self.set_account(&account)?;
-
-        Ok(())
-    }
-
-    /// Update when we last time we saw an email that didn't contain
-    /// autocrypt field.
-    /// * `account_mail` - The user account or optional None if we are in wildmode
-    /// * `peer_mail` - Peer we want to update
-    /// * `effective_date` - The date we want to update to. This should be the date from the email.
-    pub fn update_last_seen(
-        &self,
-        account_mail: &str,
-        peer_mail: &str,
-        effective_date: DateTime<Utc>,
-        user_agent: &str
-    ) -> Result<bool> {
-
-        if effective_date > Utc::now() {
-            return Err(anyhow::anyhow!("Date is in the future"));
-        }
-
-        let mut peer = self.peer(account_mail, peer_mail);
-
-        match peer {
-            Err(err) => {
-                match err.kind() {
-                    CannotFindPeerKey => {
-                        Ok(false)
-                    }
-                    _ => return Err(err)
-                }
-            }
-            Ok(peer) => {
-                if peer.last_seen < effective_date {
-                    peer.last_seen = effective_date;
-                }
-
-                peer.user_agent = Some(user_agent);
-                if peer.counting_since < effective_date {
-                    peer.count_no_ach = peer.count_no_arch + 1;
-                }
-                if peer.counting_since < peer.timestamp && 
-                    peer.counting_since + Duration::days(35) < effective_date {
-
-                    peer.count_no_ach = 1;
-                    peer.count_have_ach = 0;
-                    peer.counting_since = peer.last_seen;
-                }
-
-                self.set_peer(&peer)?;
-                Ok(true)
-            }
-        }
-    }
-
-    /// Update or install a peer from an email with an autocrypt header.
-    /// * `account_mail` - The user account or optional None if we are in wildmode
-    /// * `peer_mail` - Peer address we want to update or install
-    /// * `cert` - A cert (gossip or normal)
-    /// * `prefer` - If the user prefer encryption or not
-    /// * `effective_date` - The efficitve date in the message
-    /// * `gossip` - if the peer exchange is gossip or not.
-    pub fn update_peer(
-        &self,
-        account_mail: &str,
-        peer_mail: &str,
-        cert: &Cert,
-        prefer: Prefer,
-        effective_date: DateTime<Utc>,
-        gossip: bool,
-    ) -> Result<bool> {
-        if account_mail == peer_mail {
-            return Err(anyhow::anyhow!(
-                "Setting a peer for your private key isn't allowed" 
-            ));
-        }
-
-        let peer = self.peer(account_mail, peer_mail);
-
-        match peer {
-            Err(err) => {
-                match err.kind() {
-                    CannotFindPeerKey => {
-                        let peer = Peer::new(peer_mail, account_mail, effective_date, cert, gossip, prefer);
-                        self.conn.set_peer(&peer)?;
-                        Ok(true)
-                    }
-                    _ => return Err(err)
-                }
-            }
-            Ok(mut peer) => {
-                if effective_date <= peer.last_seen {
-                    return Ok(false);
-                }
-
-                peer.last_seen = effective_date;
-
-                if !gossip {
-                    if peer.timestamp.is_none() || 
-                        effective_date > peer.timestamp.unwrap()
-                    {
-                        peer.timestamp = Some(effective_date);
-                        peer.cert_fpr = Some(cert.fingerprint());
-
-                        peer.account = account_mail.to_owned();
-                        peer.prefer = prefer;
-
-                    }
-                } else if peer.gossip_timestamp.is_none() ||
-                    effective_date > peer.gossip_timestamp.unwrap()
-                {
-                    peer.gossip_timestamp = Some(effective_date);
-                    peer.gossip_fpr = Some(cert.fingerprint());
-
-                    peer.account = account_mail.to_owned();
-                }
-                self.conn.update_peer(&peer, self.wildmode)?;
-
-                self.conn.set_cert(&peer.account, &cert)?;
-
-                Ok(true)
-            }
-        }
-    }
-
-
-    /// Make a setup message. Setup messages are used to transfer your private key
-    /// from one autocrypt implementation to another. Making it easier to change MUA.
-    pub fn setup_message(&self, account_mail: &str) -> Result<AutocryptSetupMessage> {
-        let cert = self.private_key(account_mail)?;
-        // let mut stmt = Self::cert_find_by_email_stmt(&self.conn)?;
-        // let cert = cert_query!(stmt, [&account_mail], StoreError::NoMatches(email.into()))?;
-
-        // if let Some(ref password) = self.password {
-        //     let open = remove_password(account.cert, password)?;
-        //     Ok(AutocryptSetupMessage::new(open))
-        // } else {
-        Ok(AutocryptSetupMessage::new(cert))
-        // }
-    }
-
-
-
-    /// Generate an autocryptheader to be inserted into a email header with our public key.
-    pub fn header(
-        &self,
-        account_mail: &str,
-        policy: &dyn Policy,
-        prefer: Prefer,
-    ) -> Result<AutocryptHeader> {
-        let cert = self.private_key(account_mail)?;
-        // TODO: get the corret stuff
-
-        AutocryptHeader::new_sender(policy, &cert, account_mail, prefer)
-    }
-
-    /// Generate a autocryptheader to be inserted into a email header
-    /// with gossip information about peers. Gossip is used to spread keys faster.
-    /// This should be called once for each gossip header we want spread.
-    /// * `account_mail` - The user account
-    /// * `peer_mail` - peer we want to generate gossip for
-    pub fn gossip_header(
-        &self,
-        account_mail: &str,
-        peer_mail: &str,
-        policy: &dyn Policy,
-    ) -> Result<AutocryptHeader> {
-        // let cert = self.key(peer_mail);
-        let peer = self.peer(account_mail, peer_mail);
-        // let stmt = let mut stmt = Self::cert_find_by_fpr_stmt(&self.conn)?;
-        let mut header = if peer.primary_key.is_some() {
-            // let cert = cert_query!(stmt, [&account_mail], StoreError::NoMatches(email.into()))?;
-            let cert = self.get_peer_cert(&peer);
-            AutocryptHeader::new_sender(policy, cert, &peer.address, peer.prefer)
-        } else if peer.gossip.is_some() {
-            // let cert = cert_query!(stmt, [&account_mail], StoreError::NoMatches(email.into()))?;
-            let cert = self.get_peer_cert(&peer);
-            AutocryptHeader::new_sender(policy, cert, &peer.address, None)
-        } else {
-            return StoreError::NoMatches("No primary or gossip key".to_string());
-        };
-        header.header_type = AutocryptHeaderType::Gossip;
-        Ok(header)
-
-        // if let Some(ref cert) = peer.cert {
-        //     if let Ok(mut header) =
-        //     AutocryptHeader::new_sender(policy, cert, &peer.address, peer.prefer)
-        //     {
-        //         header.header_type = AutocryptHeaderType::Gossip;
-        //         return Ok(header);
-        //     }
-        // }
-        // if let Some(ref cert) = peer.gossip_cert {
-        //     if let Ok(mut header) = AutocryptHeader::new_sender(policy, cert, &peer.address, None) {
-        //         header.header_type = AutocryptHeaderType::Gossip;
-        //         return Ok(header);
-        //     }
-        // }
-        // Err(anyhow::anyhow!("Can't find key to create gossip data"))
-        // gossip_helper(&peer, policy)
-    }
 
     /// Returns the matching TSK.
     ///
     /// Like [`Store::lookup_by_cert_fpr`], but only returns
     /// certificates with private key material.
-    pub fn current_peer_key_by_email(&self, account_mail: &str, peer_email: &str) -> Result<Cow<LazyCert>> {
+    pub fn current_account_key_by_email(&self, account_email: &str) -> Result<Cow<LazyCert>> {
         tracer!(TRACE, "Autocrypt::current_peer_key_by_email");
+
+        let account = self.account(account_email)?;
+
+        if account.fpr.is_none() {
+            return Err(anyhow::Error::from(
+                    StoreError::NoMatches(format!("No primary key for email: {}", account_email))));
+        }
+
+        let fpr = account.fpr.unwrap();
 
         let mut stmt = Self::tsk_find_stmt(&self.conn)?;
 
         let r = cert_query!(
             stmt,
-            [peer_email],
-            StoreError::NotFound(KeyHandle::from(fpr))
+            [fpr.to_hex()],
+            StoreError::NotFound(KeyHandle::from(fpr.clone()))
         )?;
         let r = r
             .into_iter()
@@ -1079,93 +889,6 @@ impl Autocrypt {
         Ok(r)
     }
 
-    /// Install a setup message into the system. If the key is usable we install the key.
-    /// If the account doesn't exist, it's created.
-    /// It doesn't care if the cert is older than the current, it will be overwritten anyways.
-    pub fn install_message(
-        &self,
-        account_mail: &str,
-        policy: &dyn Policy,
-        mut message: AutocryptSetupMessageParser,
-        password: &Password,
-    ) -> Result<()> {
-        message.decrypt(password)?;
-        let decrypted = message.parse()?;
-        let mut cert = decrypted.into_cert();
-
-        let now = SystemTime::now();
-        cert.primary_key().with_policy(policy, now)?;
-
-        if let Some(ref password) = self.password {
-            cert = set_password(cert, password)?
-        }
-
-        let account = if let Ok(mut account) = self.account(account_mail) {
-            // We don't check which cert is newer etc.
-            // We expect the user to know what he/she is doing
-            account.cert = cert;
-            account
-        } else {
-            Account::new(account_mail, cert)
-        };
-
-        // let peer = self
-        //     .conn
-        //     .peer(account_mail, Selector::Email(account_mail))
-        //     .ok();
-        //
-        // self.update_peer_forceable(
-        //     account_mail,
-        //     account_mail,
-        //     peer,
-        //     &account.cert,
-        //     account.prefer,
-        //     now.into(),
-        //     false,
-        //     true,
-        // )?;
-        Ok(())
-    }
-
-    pub fn recommend(
-        &self,
-        account_mail: &str,
-        target_mail: &str,
-        policy: &dyn Policy,
-        reply_to_encrypted: bool,
-        prefer: Prefer,
-    ) -> UIRecommendation {
-        if let Some(peer) = peer {
-            let pre = peer.preliminary_recommend(policy);
-            if pre.encryptable() && reply_to_encrypted {
-                return UIRecommendation::Encrypt;
-            }
-            if pre.preferable() && peer.prefer.encrypt() && prefer.encrypt() {
-                return UIRecommendation::Encrypt;
-            }
-            return pre;
-        }
-        UIRecommendation::Disable
-    }
-
-    /// multi_recommend runs recommend on multiple peers.
-    /// * `account_mail` - The user account
-    /// * `peers_mail` - Peers we want to check if it's safe to encrypt to.
-    /// * `reply_to_encrypted` - If we reply to an encrypted email.
-    /// * `prefer` - our account setting.
-    pub fn multi_recommend(
-        &self,
-        account_mail: &str,
-        target_emails: &[&str],
-        policy: &dyn Policy,
-        reply_to_encrypted: bool,
-        prefer: Prefer,
-    ) -> UIRecommendation {
-        target_emails
-            .iter()
-            .map(|m| self.recommend(account_mail, m, policy, reply_to_encrypted, prefer))
-            .sum()
-    }
 
     /// Returns the matching TSK.
     ///
@@ -1230,15 +953,15 @@ impl Autocrypt {
     /// also deleted.
     ///
     /// Returns an error if the specified certificate is not found.
-    pub fn account_delete(&mut self, account: &str) -> Result<()> {
+    pub fn account_delete(&mut self, account_mail: &str) -> Result<()> {
         let changes = wrap_err!(
-            Self::account_delete_stmt(&self.conn)?.execute(params![account]),
+            Self::delete_account_stmt(&self.conn)?.execute(params![account_mail]),
             CannotDeleteAccount,
-            format!("Deleting {}", account)
+            format!("Deleting {}", account_mail)
         )?;
 
         if changes == 0 {
-            Err(StoreError::NotFound(KeyHandle::from(account.clone())).into())
+            Err(StoreError::NoMatches(account_mail.to_owned()).into())
         } else {
             Ok(())
         }
@@ -1250,15 +973,15 @@ impl Autocrypt {
     /// also deleted.
     ///
     /// Returns an error if the specified certificate is not found.
-    pub fn account_delete(&mut self, account: &str) -> Result<()> {
+    pub fn peer_delete(&mut self, peer_mail: &str) -> Result<()> {
         let changes = wrap_err!(
-            Self::account_delete_stmt(&self.conn)?.execute(params![account]),
+            Self::delete_peer_stmt(&self.conn)?.execute(params![peer_mail]),
             CannotDeletePeer,
-            format!("Deleting {}", account)
+            format!("Deleting {}", peer_mail)
         )?;
 
         if changes == 0 {
-            Err(StoreError::NotFound(KeyHandle::from(account.clone())).into())
+            Err(StoreError::NoMatches(peer_mail.to_owned()).into())
         } else {
             Ok(())
         }
@@ -1282,6 +1005,345 @@ impl Autocrypt {
         } else {
             Ok(())
         }
+    }
+
+    pub fn set_prefer(&self, account_email: &str, prefer: Prefer) -> Result<()> {
+        let mut account = self.account(account_email)?;
+        account.prefer = prefer;
+        self.set_account(&account)
+    }
+
+    /// Get the prefer setting for an account
+    pub fn prefer(&self, account_email: &str) -> Result<Prefer> {
+        let account = self.account(account_email)?;
+        Ok(account.prefer)
+    }
+
+    /// Set enable for an account
+    /// These are just internal settings and doesn't effect runtime.
+    /// Functions such as recommend does not check the enable and it's up
+    /// the user to do so.
+    pub fn set_enable(&self, account_email: &str, enable: bool) -> Result<()> {
+        tracer!(TRACE, "Autocrypt::set_enable");
+
+        let mut account = self.account(account_email)?;
+        account.enable = enable;
+        self.set_account(&account)
+    }
+
+    /// Get enable for an account
+    pub fn enable(&self, account_email: &str) -> Result<bool> {
+        let account = self.account(account_email)?;
+        Ok(account.enable)
+    }
+
+    fn gen_cert(&self, account_email: &str, now: SystemTime) -> Result<(Cert, Signature)> {
+        let mut builder = CertBuilder::new();
+        builder = builder.add_userid(account_email);
+        builder = builder.set_creation_time(now);
+
+        builder = builder.set_validity_period(None);
+
+        // builder = builder.set_validity_period(
+        //     Some(Duration::new(3 * SECONDS_IN_YEAR, 0))),
+
+        builder = builder.set_cipher_suite(CipherSuite::Cv25519);
+
+        builder = builder.add_signing_subkey();
+        // We set storage_encryption so we can store drafts
+        builder = builder.add_subkey(
+            KeyFlags::empty()
+                .set_transport_encryption()
+                .set_storage_encryption(),
+            None,
+            None,
+        );
+
+        // builder = builder.set_password(self.password.clone());
+
+        builder.generate()
+    }
+
+    /// Update the private key the account for our mail. If the current key is
+    /// is still usable, no update is done.
+    pub fn update_private_key(&self, policy: &dyn Policy, account_email: &str) -> Result<()> {
+        let now = SystemTime::now();
+
+        let mut account = if let Ok(mut account) = self.account(account_email) {
+            let key = self.private_key(account_email)?;
+            if key.primary_key().with_policy(policy, now).is_ok() {
+                return Ok(());
+            }
+            account
+        } else {
+            let account = Account::new(account_email, None);
+            self.set_account(&account)?;
+            account
+        };
+
+        let (cert, _) = self.gen_cert(account_email, now)?;
+        account.fpr = Some(cert.fingerprint());
+        self.set_account(&account)?;
+
+        Ok(())
+    }
+
+    /// Update when we last time we saw an email that didn't contain
+    /// autocrypt field.
+    /// * `account_email` - The user account or optional None if we are in wildmode
+    /// * `peer_mail` - Peer we want to update
+    /// * `effective_date` - The date we want to update to. This should be the date from the email.
+    pub fn update_last_seen(
+        &self,
+        account_email: &str,
+        peer_mail: &str,
+        effective_date: DateTime<Utc>,
+        user_agent: &str
+    ) -> Result<bool> {
+
+        if effective_date > Utc::now() {
+            return Err(anyhow::anyhow!("Date is in the future"));
+        }
+
+        let mut peer = self.peer(account_email, peer_mail);
+
+        match peer {
+            Err(err) => {
+                match err.downcast_ref::<Error>() {
+                    Some(CannotFindPeerKey) => {
+                        Ok(false)
+                    }
+                    _ => return Err(err)
+                }
+            }
+            Ok(ref mut peer) => {
+                if peer.last_seen < effective_date {
+                    peer.last_seen = effective_date;
+                }
+
+                peer.bad_user_agent = Some(user_agent.to_owned());
+                if peer.counting_since < effective_date {
+                    peer.count_no_ach = peer.count_no_ach + 1;
+                }
+                let timestamp = if let Some(ts) = peer.timestamp {
+                    ts
+                } else {
+                    return Ok(false)
+                };
+                if peer.counting_since < timestamp && 
+                    peer.counting_since + Duration::days(35) < effective_date {
+
+                    peer.count_no_ach = 1;
+                    peer.count_have_ach = 0;
+                    peer.counting_since = peer.last_seen;
+                }
+
+                self.set_peer(&peer)?;
+                Ok(true)
+            }
+        }
+    }
+
+    /// Update or install a peer from an email with an autocrypt header.
+    /// * `account_email` - The user account or optional None if we are in wildmode
+    /// * `peer_mail` - Peer address we want to update or install
+    /// * `cert` - A cert (gossip or normal)
+    /// * `prefer` - If the user prefer encryption or not
+    /// * `effective_date` - The efficitve date in the message
+    /// * `gossip` - if the peer exchange is gossip or not.
+    pub fn update_peer(
+        &self,
+        account_email: &str,
+        peer_mail: &str,
+        cert: &Cert,
+        prefer: Prefer,
+        effective_date: DateTime<Utc>,
+        gossip: bool,
+    ) -> Result<bool> {
+        if account_email == peer_mail {
+            return Err(anyhow::anyhow!(
+                "Setting a peer for your private key isn't allowed" 
+            ));
+        }
+
+        let peer = self.peer(account_email, peer_mail);
+
+        match peer {
+            Err(err) => {
+                match err.downcast_ref::<Error>() {
+                    Some(CannotFindPeerKey) => {
+                        let peer = Peer::new(peer_mail, account_email, effective_date, cert, gossip, prefer);
+                        self.set_peer(&peer)?;
+                        Ok(true)
+                    }
+                    _ => return Err(err)
+                }
+            }
+            Ok(mut peer) => {
+                if effective_date <= peer.last_seen {
+                    return Ok(false);
+                }
+
+                peer.last_seen = effective_date;
+
+                if !gossip {
+                    if peer.timestamp.is_none() || 
+                        effective_date > peer.timestamp.unwrap()
+                    {
+                        peer.timestamp = Some(effective_date);
+                        peer.cert_fpr = Some(cert.fingerprint());
+
+                        peer.account = account_email.to_owned();
+                        peer.prefer = prefer;
+
+                    }
+                } else if peer.gossip_timestamp.is_none() ||
+                    effective_date > peer.gossip_timestamp.unwrap()
+                {
+                    peer.gossip_timestamp = Some(effective_date);
+                    peer.gossip_fpr = Some(cert.fingerprint());
+
+                    peer.account = account_email.to_owned();
+                }
+                self.set_peer(&peer)?;
+
+                self.insert_cert(account_email, &cert)?;
+
+                Ok(true)
+            }
+        }
+    }
+
+    pub fn recommend(
+        &self,
+        account_email: &str,
+        peer_mail: &str,
+        policy: &dyn Policy,
+        reply_to_encrypted: bool,
+        prefer: Prefer,
+    ) -> UIRecommendation {
+        if let Ok(peer) = self.peer(account_email, peer_mail) {
+            let pre = peer.preliminary_recommend(policy);
+            if pre.encryptable() && reply_to_encrypted {
+                return UIRecommendation::Encrypt;
+            }
+            if pre.preferable() && peer.prefer.encrypt() && prefer.encrypt() {
+                return UIRecommendation::Encrypt;
+            }
+            return pre;
+        }
+        UIRecommendation::Disable
+    }
+
+    /// multi_recommend runs recommend on multiple peers.
+    /// * `account_email` - The user account
+    /// * `peers_mail` - Peers we want to check if it's safe to encrypt to.
+    /// * `reply_to_encrypted` - If we reply to an encrypted email.
+    /// * `prefer` - our account setting.
+    pub fn multi_recommend(
+        &self,
+        account_email: &str,
+        peer_mails: &[&str],
+        policy: &dyn Policy,
+        reply_to_encrypted: bool,
+        prefer: Prefer,
+    ) -> UIRecommendation {
+        peer_mails
+            .iter()
+            .map(|m| self.recommend(account_email, m, policy, reply_to_encrypted, prefer))
+            .sum()
+    }
+
+    /// Generate an autocryptheader to be inserted into a email header with our public key.
+    pub fn header(
+        &self,
+        account_email: &str,
+        policy: &dyn Policy,
+        prefer: Prefer,
+    ) -> Result<AutocryptHeader> {
+        let cert = self.private_key(account_email)?;
+        // TODO: get the corret stuff
+
+        AutocryptHeader::new_sender(policy, &cert, account_email, prefer)
+    }
+
+    /// Generate a autocryptheader to be inserted into a email header
+    /// with gossip information about peers. Gossip is used to spread keys faster.
+    /// This should be called once for each gossip header we want spread.
+    /// * `account_email` - The user account
+    /// * `peer_mail` - peer we want to generate gossip for
+    pub fn gossip_header(
+        &self,
+        account_email: &str,
+        peer_mail: &str,
+        policy: &dyn Policy,
+    ) -> Result<AutocryptHeader> {
+
+        let peer = self.peer(account_email, peer_mail)?;
+
+        let mut header = if let Some(fpr) = peer.cert_fpr {
+            let cert = self.peer_key(&fpr)?;
+            AutocryptHeader::new_sender(policy, &cert, &peer.mail, peer.prefer)
+        } else if let Some(fpr) = peer.gossip_fpr {
+            let cert = self.peer_key(&fpr)?;
+            AutocryptHeader::new_sender(policy, &cert, &peer.mail, None)
+        } else {
+            return Err(anyhow::Error::from(
+                    StoreError::NoMatches("No primary or gossip key".to_string())));
+        }?;
+        header.header_type = AutocryptHeaderType::Gossip;
+        Ok(header)
+    }
+
+    /// Install a setup message into the system. If the key is usable we install the key.
+    /// If the account doesn't exist, it's created.
+    /// It doesn't care if the cert is older than the current, it will be overwritten anyways.
+    pub fn install_message(
+        &self,
+        account_email: &str,
+        policy: &dyn Policy,
+        mut message: AutocryptSetupMessageParser,
+        password: &Password,
+    ) -> Result<()> {
+        message.decrypt(password)?;
+        let decrypted = message.parse()?;
+        let cert = decrypted.into_cert();
+
+        let now = SystemTime::now();
+        cert.primary_key().with_policy(policy, now)?;
+
+        // if let Some(ref password) = self.password {
+        //     cert = set_password(cert, password)?
+        // }
+
+        let account = match self.account(account_email) {
+            Ok(mut account) => {
+                // We don't check which cert is newer etc.
+                // We expect the user to know what he/she is doing
+                account.fpr = Some(cert.fingerprint());
+                account
+            },
+            Err(_) => {
+                Account::new(account_email, Some(cert.fingerprint()))
+            }
+        };
+        self.set_account(&account)?;
+        self.insert_cert(account_email, &cert)
+    }
+
+    /// Make a setup message. Setup messages are used to transfer your private key
+    /// from one autocrypt implementation to another. Making it easier to change MUA.
+    pub fn setup_message(&self, account_email: &str) -> Result<AutocryptSetupMessage> {
+        let cert = self.private_key(account_email)?;
+        // let mut stmt = Self::cert_find_by_email_stmt(&self.conn)?;
+        // let cert = cert_query!(stmt, [&account_email], StoreError::NoMatches(email.into()))?;
+
+        // if let Some(ref password) = self.password {
+        //     let open = remove_password(account.cert, password)?;
+        //     Ok(AutocryptSetupMessage::new(open))
+        // } else {
+        Ok(AutocryptSetupMessage::new(cert))
+        // }
     }
 }
 
