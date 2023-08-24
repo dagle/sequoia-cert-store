@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 use chrono::DateTime;
 use chrono::Duration;
+use chrono::NaiveDateTime;
 use chrono::Utc;
 use openpgp::cert::amalgamation::ValidateAmalgamation;
 use openpgp::cert::CertBuilder;
@@ -16,6 +17,12 @@ use openpgp::packet::Signature;
 use openpgp::policy::Policy;
 use openpgp::serialize::Serialize;
 use openpgp::types::KeyFlags;
+use rusqlite::Rows;
+use rusqlite::ToSql;
+use rusqlite::types::FromSql;
+use rusqlite::types::FromSqlError;
+use rusqlite::types::ToSqlOutput;
+use rusqlite::types::Value;
 use rusqlite::{params, CachedStatement, Connection, OpenFlags, Row};
 
 use openpgp::{packet::UserID, parse::Parse, Cert, Fingerprint, KeyHandle, KeyID};
@@ -38,6 +45,41 @@ pub const BUSY_WAIT_TIME: std::time::Duration = std::time::Duration::from_secs(5
 pub const KEYS_DB: &[&str] = &["_autocrypt.sqlite"];
 
 use crate::TRACE;
+
+/// TODO: make members of structs less public, so we can't change key values
+
+macro_rules! get_optional_time {
+    ($field:expr) => {{
+        let unix: Option<i64> = $field?;
+        let ts: Option<DateTime<Utc>> = if let Some(unix) = unix {
+            let nt = NaiveDateTime::from_timestamp_opt(unix, 0)
+                .ok_or_else(|| anyhow::anyhow!("Couldn't parse timestamp"))?;
+            let dt = DateTime::<Utc>::from_utc(nt, Utc);
+            Some(dt)
+        } else {
+            None
+        };
+        ts
+    }};
+}
+
+macro_rules! get_time {
+    ($field:expr) => {{
+        let unix: i64 = $field?;
+        let nt = NaiveDateTime::from_timestamp_opt(unix, 0)
+            .ok_or_else(|| anyhow::anyhow!("Couldn't parse timestamp"))?;
+        let dt = DateTime::<Utc>::from_utc(nt, Utc);
+        dt
+    }};
+}
+
+macro_rules! get_fpr {
+    ($field:expr) => {{
+        let fpr_str: Option<String> = $field?;
+        let fpr = fpr_str.map(|s| Fingerprint::from_bytes(s.as_bytes()));
+        fpr
+    }};
+}
 
 #[derive(PartialEq, Debug)]
 pub struct Account {
@@ -74,6 +116,23 @@ impl From<Prefer> for Option<&str> {
         match value {
             Prefer::Mutual => Some("mutual"),
             Prefer::Nopreference => Some("nopreference"),
+        }
+    }
+}
+
+impl ToSql for Prefer {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        Ok(ToSqlOutput::Owned(Value::Integer(*self as i64)))
+    }
+}
+
+impl FromSql for Prefer {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let i = i64::column_result(value)?;
+        match i {
+            0 => Ok(Prefer::Mutual),
+            1 => Ok(Prefer::Nopreference),
+            x => Err(FromSqlError::OutOfRange(x)),
         }
     }
 }
@@ -137,7 +196,7 @@ impl Peer {
                 gossip_fpr: None,
                 prefer,
                 counting_since: now,
-                count_have_ach: 0,
+                count_have_ach: 1,
                 count_no_ach: 0,
                 bad_user_agent: None,
             }
@@ -152,7 +211,7 @@ impl Peer {
                 gossip_fpr: Some(key.fingerprint()),
                 prefer: Prefer::default(),
                 counting_since: now,
-                count_have_ach: 0,
+                count_have_ach: 1,
                 count_no_ach: 0,
                 bad_user_agent: None,
             }
@@ -493,7 +552,6 @@ impl Autocrypt {
             format!("Registering EMAIL collation function")
         )?;
 
-        // TODO: Add current key? It's needed for sign (decrypt and sign) and update-key
         wrap_err!(
             conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS account (
@@ -501,9 +559,9 @@ impl Autocrypt {
                     prefer INT,
                     enable INT,
                     primary_key TEXT
-                );
-                CREATE INDEX IF NOT EXISTS account_index
-                    ON userids (address COLLATE EMAIL, primary_key))"
+                );"
+                // CREATE INDEX IF NOT EXISTS account_index
+                //     ON account (address COLLATE EMAIL, primary_key)"
             ),
             InitCannotOpenDB,
             format!("Creating account table ('{}')", keys_db.display())
@@ -513,15 +571,15 @@ impl Autocrypt {
                 "CREATE TABLE IF NOT EXISTS keys (
                     primary_key TEXT NOT NULL,
                     account TEXT NOT NULL,
-                    secret BOOLEAN,
-                    tpk BLOB,
+                    secret BOOLEAN NOT NULL,
+                    tpk BLOB NOT NULL,
                     PRIMARY KEY(primary_key, account),
                     FOREIGN KEY (account)
-                            REFERENCES account(address),
+                            REFERENCES account(address)
                         ON DELETE CASCADE
-                 );
-                 CREATE INDEX IF NOT EXISTS keys_index
-                   ON keys (primary_key, secret)"
+                 );"
+                 // CREATE INDEX IF NOT EXISTS keys_index
+                 //   ON keys (primary_key, secret)"
             ),
             InitCannotOpenDB,
             format!("Creating keys table ('{}')", keys_db.display())
@@ -536,9 +594,9 @@ impl Autocrypt {
                    FOREIGN KEY (primary_key)
                        REFERENCES keys(primary_key)
                      ON DELETE CASCADE
-                 );
-                 CREATE INDEX IF NOT EXISTS subkeys_index
-                   ON subkeys (subkey, primary_key)"
+                 );"
+                 // CREATE INDEX IF NOT EXISTS subkeys_index
+                 //   ON subkeys (subkey, primary_key)"
             ),
             InitCannotOpenDB,
             format!("Creating subkeys table ('{}')", keys_db.display())
@@ -561,10 +619,11 @@ impl Autocrypt {
                     bad_user_agent text,
                     PRIMARY KEY(address, account),
                     FOREIGN KEY(account) 
-                            REFERENCES autocrypt_account(address),
+                            REFERENCES autocrypt_account(address)
                         ON DELETE CASCADE
-                );" // CREATE INDEX IF NOT EXISTS peer_index
-                    //     ON peer (address COLLATE EMAIL, primary_key)"
+                ); 
+                CREATE INDEX IF NOT EXISTS peer_index
+                  ON peer (address COLLATE EMAIL, primary_key)"
             ),
             InitCannotOpenDB,
             format!("Creating peer table ('{}')", keys_db.display())
@@ -634,7 +693,7 @@ impl Autocrypt {
         "SELECT tpk, secret FROM account
             LEFT JOIN keys
                 ON account.address == keys.account
-            WHERE address == ? and private == 1"
+            WHERE address == ?"
     );
 
     // sql_stmt!(
@@ -658,10 +717,9 @@ impl Autocrypt {
         "SELECT address,
             prefer,
             enable,
+            primary_key
         FROM account
-            LEFT JOIN keys
-                ON peer.gossip_primary_key == keys.primary_key
-            WHERE address == ? and account == ?"
+            WHERE address == ?"
     );
 
     sql_stmt!(
@@ -698,7 +756,7 @@ impl Autocrypt {
     // Returns a prepared statement for updating the keys table.
     sql_stmt!(
         cert_save_insert_primary_stmt,
-        "INSERT OR REPLACE INTO keys (primary_key, account, secret, tpk)
+        "INSERT INTO keys (primary_key, account, secret, tpk)
                 VALUES (?, ?, ?, ?)"
     );
 
@@ -711,8 +769,8 @@ impl Autocrypt {
 
     sql_stmt!(
         account_save_insert_stmt,
-        "INSERT OR REPLACE INTO account (address, prefer, enable)
-                VALUES (?, ?, ?)"
+        "INSERT OR REPLACE INTO account (address, prefer, enable, primary_key)
+          VALUES (?, ?, ?, ?)"
     );
 
     sql_stmt!(
@@ -798,11 +856,49 @@ impl Autocrypt {
         Ok(r)
     }
     fn account_load(row: &Row) -> rusqlite::Result<Account> {
-        todo!()
+        let mail = row.get(0)?;
+        let fpr: Option<Fingerprint> = get_fpr!(row.get(1));
+        let prefer = row.get(2)?;
+        let enable = row.get(3)?;
+        Ok(Account{
+            mail,
+            fpr,
+            prefer,
+            enable,
+        })
     }
 
-    fn peer_load(row: &Row) -> rusqlite::Result<Peer> {
-        todo!()
+    fn row_to_peer<'a>(rows: &mut Rows) -> Result<Peer> {
+        if let Some(row) = rows.next()? {
+            let mail = row.get(0)?;
+            let account = row.get(1)?;
+            let last_seen = get_time!(row.get(2));
+            let timestamp = get_optional_time!(row.get(3));
+            let cert_fpr = get_fpr!(row.get(4));
+            let gossip_timestamp = get_optional_time!(row.get(5));
+            let gossip_fpr = get_fpr!(row.get(6));
+            let prefer = row.get(7)?;
+            let counting_since = get_time!(row.get(8));
+            let count_have_ach = row.get(9)?;
+            let count_no_ach = row.get(10)?;
+            let bad_user_agent = row.get(11)?;
+            Ok(Peer {
+                mail,
+                account,
+                last_seen,
+                timestamp,
+                cert_fpr,
+                gossip_timestamp,
+                gossip_fpr,
+                prefer,
+                counting_since,
+                count_have_ach,
+                count_no_ach,
+                bad_user_agent,
+            })
+        } else {
+            Err(anyhow::anyhow!("No Peer found"))
+        }
     }
 
     fn account(&self, account_email: &str) -> Result<Account> {
@@ -828,7 +924,8 @@ impl Autocrypt {
     }
     fn set_account(&self, acc: &Account) -> Result<()> {
         wrap_err!(
-            Self::account_save_insert_stmt(&self.conn)?.execute(params![acc.mail]),
+            Self::account_save_insert_stmt(&self.conn)?.
+                execute(params![acc.mail, acc.prefer, acc.enable, acc.fpr.as_ref().map(|fpr| fpr.to_hex())]),
             UnknownDbError,
             "Trying to set account"
         )?;
@@ -841,35 +938,26 @@ impl Autocrypt {
         let mut stmt = Self::get_peer_stmt(&self.conn)?;
 
         let mut rows = wrap_err!(
-            stmt.query_map([account_email, peer_mail], Self::peer_load),
+            stmt.query([account_email, peer_mail]),
             UnknownDbError,
             "executing query"
         )?;
 
-        if let Some(row) = rows.next() {
-            let peer = wrap_err!(row, UnknownError, "parsing account")?;
-            Ok(peer)
-        } else {
-            Err(anyhow::Error::from(StoreError::NoMatches(format!(
-                "No account for email: {}",
-                account_email
-            ))))
-        }
+        Self::row_to_peer(&mut rows)
     }
 
     fn set_peer(&self, peer: &Peer) -> Result<()> {
-        wrap_err!(
-            Self::account_save_insert_stmt(&self.conn)?.execute(params![peer.mail]),
-            UnknownDbError,
-            "Trying to set account"
-        )?;
+        // wrap_err!(
+        //     Self::account_save_insert_stmt(&self.conn)?.execute(params![peer.mail]),
+        //     UnknownDbError,
+        //     "Trying to set account"
+        // )?;
         Ok(())
     }
 
     fn private_key(&self, account_email: &str) -> Result<Cert> {
         tracer!(TRACE, "Autocrypt::private_key");
 
-        // TODO: real stmt
         let mut stmt = Self::get_peer_stmt(&self.conn)?;
 
         let mut rows = wrap_err!(
@@ -895,7 +983,6 @@ impl Autocrypt {
     fn peer_key(&self, peer: &Fingerprint) -> Result<Cert> {
         tracer!(TRACE, "Autocrypt::peer_key");
 
-        // TODO: real stmt
         let mut stmt = Self::get_peer_stmt(&self.conn)?;
 
         let mut rows = wrap_err!(
@@ -918,16 +1005,37 @@ impl Autocrypt {
         }
     }
 
-    fn insert_cert(&self, account_email: &str, cert: &Cert) -> Result<()> {
+    fn insert_cert(&mut self, account_email: &str, cert: &Cert, secret: bool) -> Result<()> {
         tracer!(TRACE, "Autocrypt::insert_cert");
 
+        let tx = self.conn.transaction()?;
+
         let mut output = Vec::new();
+        let fpr = cert.fingerprint().to_hex();
         cert.as_tsk().serialize(&mut output)?;
         wrap_err!(
-            Self::account_save_insert_stmt(&self.conn)?.execute(params![account_email, output]),
+            Self::cert_save_insert_primary_stmt(&tx)?.execute(params![
+                fpr,
+                account_email, 
+                secret,
+                output
+            ]),
             UnknownDbError,
-            "Trying to set account"
+            "Trying to set keys"
         )?;
+
+        for key in cert.keys() {
+            let sub_fpr = key.fingerprint().to_hex();
+            wrap_err!(
+                Self::cert_save_insert_subkeys_stmt(&tx)?.execute(params![
+                    sub_fpr,
+                    fpr,
+                ]),
+                UnknownDbError,
+                "Trying to set subkeys"
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1154,12 +1262,12 @@ impl Autocrypt {
         builder.generate()
     }
 
-    /// Update the private key the account for our mail. If the current key is
-    /// is still usable, no update is done.
-    pub fn update_private_key(&self, policy: &dyn Policy, account_email: &str) -> Result<()> {
+    /// Creates an account or update the private key the account for our mail. 
+    /// If the current key is still usable, no update is done.
+    pub fn update_private_key(&mut self, policy: &dyn Policy, account_email: &str) -> Result<()> {
         let now = SystemTime::now();
 
-        let mut account = if let Ok(mut account) = self.account(account_email) {
+        let mut account = if let Ok(account) = self.account(account_email) {
             let key = self.private_key(account_email)?;
             if key.primary_key().with_policy(policy, now).is_ok() {
                 return Ok(());
@@ -1167,13 +1275,13 @@ impl Autocrypt {
             account
         } else {
             let account = Account::new(account_email, None);
-            self.set_account(&account)?;
             account
         };
 
         let (cert, _) = self.gen_cert(account_email, now)?;
         account.fpr = Some(cert.fingerprint());
         self.set_account(&account)?;
+        // self.insert_cert(account_email, &cert, true)?;
 
         Ok(())
     }
@@ -1198,7 +1306,7 @@ impl Autocrypt {
 
         match peer {
             Err(err) => match err.downcast_ref::<Error>() {
-                Some(CannotFindPeerKey) => Ok(false),
+                Some(Error::CannotFindPeerKey(_, _)) => Ok(false),
                 _ => return Err(err),
             },
             Ok(ref mut peer) => {
@@ -1237,7 +1345,7 @@ impl Autocrypt {
     /// * `effective_date` - The efficitve date in the message
     /// * `gossip` - if the peer exchange is gossip or not.
     pub fn update_peer(
-        &self,
+        &mut self,
         account_email: &str,
         peer_mail: &str,
         cert: &Cert,
@@ -1245,6 +1353,7 @@ impl Autocrypt {
         effective_date: DateTime<Utc>,
         gossip: bool,
     ) -> Result<bool> {
+        // remove this?
         if account_email == peer_mail {
             return Err(anyhow::anyhow!(
                 "Setting a peer for your private key isn't allowed"
@@ -1255,7 +1364,7 @@ impl Autocrypt {
 
         match peer {
             Err(err) => match err.downcast_ref::<Error>() {
-                Some(CannotFindPeerKey) => {
+                Some(Error::CannotFindPeerKey(_, _)) => {
                     let peer = Peer::new(
                         peer_mail,
                         account_email,
@@ -1265,24 +1374,38 @@ impl Autocrypt {
                         prefer,
                     );
                     self.set_peer(&peer)?;
+                    self.insert_cert(account_email, &cert, false)?;
                     Ok(true)
                 }
                 _ => return Err(err),
             },
             Ok(mut peer) => {
                 if effective_date <= peer.last_seen {
-                    return Ok(false);
+                    return Ok(false)
                 }
 
+                peer.count_have_ach = peer.count_have_ach + 1;
                 peer.last_seen = effective_date;
 
                 if !gossip {
                     if peer.timestamp.is_none() || effective_date > peer.timestamp.unwrap() {
                         peer.timestamp = Some(effective_date);
-                        peer.cert_fpr = Some(cert.fingerprint());
-
-                        peer.account = account_email.to_owned();
                         peer.prefer = prefer;
+
+                        // if we already have the key, we don't want to re-add it
+                        let new_fpr = cert.fingerprint();
+                        peer.cert_fpr = Some(new_fpr);
+                        self.set_peer(&peer)?;
+                        let res = self.insert_cert(account_email, &cert, false);
+                        match res {
+                            Ok(_) => {
+                                return Ok(true)
+                            }
+                            Err(e) => {
+                                // check for StatementChangedRows and mask them
+                                return Err(e)
+                            }
+                        }
                     }
                 } else if peer.gossip_timestamp.is_none()
                     || effective_date > peer.gossip_timestamp.unwrap()
@@ -1290,13 +1413,12 @@ impl Autocrypt {
                     peer.gossip_timestamp = Some(effective_date);
                     peer.gossip_fpr = Some(cert.fingerprint());
 
-                    peer.account = account_email.to_owned();
-                }
-                self.set_peer(&peer)?;
+                    self.set_peer(&peer)?;
+                    self.insert_cert(account_email, &cert, false)?;
+                    return Ok(true)
+                } 
 
-                self.insert_cert(account_email, &cert)?;
-
-                Ok(true)
+                Ok(false)
             }
         }
     }
@@ -1349,7 +1471,6 @@ impl Autocrypt {
         prefer: Prefer,
     ) -> Result<AutocryptHeader> {
         let cert = self.private_key(account_email)?;
-        // TODO: get the corret stuff
 
         AutocryptHeader::new_sender(policy, &cert, account_email, prefer)
     }
@@ -1386,7 +1507,7 @@ impl Autocrypt {
     /// If the account doesn't exist, it's created.
     /// It doesn't care if the cert is older than the current, it will be overwritten anyways.
     pub fn install_message(
-        &self,
+        &mut self,
         account_email: &str,
         policy: &dyn Policy,
         mut message: AutocryptSetupMessageParser,
@@ -1413,7 +1534,7 @@ impl Autocrypt {
             Err(_) => Account::new(account_email, Some(cert.fingerprint())),
         };
         self.set_account(&account)?;
-        self.insert_cert(account_email, &cert)
+        self.insert_cert(account_email, &cert, true)
     }
 
     /// Make a setup message. Setup messages are used to transfer your private key
@@ -1774,3 +1895,404 @@ impl<'a> Store<'a> for Autocrypt {
 //         Ok(Cow::Owned(LazyCert::from(merged)))
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use sequoia_openpgp::cert::CertBuilder;
+    use sequoia_openpgp::cert::CipherSuite;
+    use sequoia_openpgp::packet::Signature;
+    use sequoia_openpgp::types::KeyFlags;
+    use sequoia_openpgp::Cert;
+
+    use chrono::{Duration, Utc};
+    use std::str::from_utf8;
+    use std::time::SystemTime;
+
+    use sequoia_openpgp::policy::StandardPolicy;
+
+    use crate::store::Autocrypt;
+    use crate::store::autocrypt::Peer;
+    use crate::store::autocrypt::Prefer;
+    use crate::store::autocrypt::UIRecommendation;
+
+    type Result<T> = sequoia_openpgp::Result<T>;
+
+    static OUR: &'static str = "art.vandelay@vandelayindustries.com";
+    static PEER1: &'static str = "regina.phalange@friends.com";
+    static PEER2: &'static str = "ken.adams@friends.com";
+
+    #[derive(PartialEq)]
+    enum Mode {
+        Seen,
+        Gossip,
+        _Both, // If we want both seen and gossip (todo)
+    }
+
+    // fn Autocrypt::empty() -> AutocryptStore<SqliteDriver> {
+    //     let conn = SqliteDriver::new(":memory:").unwrap();
+    //     conn.setup().unwrap();
+    //     AutocryptStore::new(conn, Some("hunter2"), false).unwrap()
+    // }
+
+    // fn gen_cert(canonicalized_mail: &str, now: SystemTime) -> Result<(Cert, Signature)> {
+    //     let mut builder = CertBuilder::new();
+    //     builder = builder.add_userid(canonicalized_mail);
+    //     builder = builder.set_creation_time(now);
+    //
+    //     builder = builder.set_validity_period(None);
+    //
+    //     // builder = builder.set_validity_period(
+    //     //     Some(Duration::new(3 * SECONDS_IN_YEAR, 0))),
+    //
+    //     // which one to use?
+    //     // builder = builder.set_cipher_suite(CipherSuite::RSA4k);
+    //     builder = builder.set_cipher_suite(CipherSuite::Cv25519);
+    //
+    //     builder = builder.add_subkey(KeyFlags::empty().set_transport_encryption(), None, None);
+    //
+    //     builder.generate()
+    // }
+
+    // fn gen_peer(
+    //     ctx: &AutocryptStore<SqliteDriver>,
+    //     account_mail: &str,
+    //     canonicalized_mail: &str,
+    //     mode: Mode,
+    //     prefer: Prefer,
+    // ) -> Result<()> {
+    //     let now = SystemTime::now();
+    //
+    //     let (cert, _) = gen_cert(canonicalized_mail, now)?;
+    //
+    //     // Since we don't we don't we don't do as as_tsk() in insert_peer, we won't write the
+    //     // private key
+    //     let peer = Peer::new(
+    //         canonicalized_mail,
+    //         account_mail,
+    //         Utc::now(),
+    //         &cert,
+    //         mode == Mode::Gossip,
+    //         prefer,
+    //     );
+    //     ctx.conn.insert_peer(&peer).unwrap();
+    //
+    //     Ok(())
+    // }
+
+    #[test]
+    fn autocryppt_test_gen_key() {
+        let mut ctx = Autocrypt::empty().unwrap();
+        let policy = StandardPolicy::new();
+
+        ctx.update_private_key(&policy, OUR).unwrap();
+
+        // let cert = ctx.private_key(OUR).unwrap();
+
+        // ctx.update_private_key(&policy, OUR).unwrap();
+        // let acc = ctx.conn.account(OUR).unwrap();
+        //
+        // // check stuff in acc
+        // ctx.update_private_key(&policy, OUR).unwrap();
+        // let acc2 = ctx.conn.account(OUR).unwrap();
+        //
+        // assert_eq!(acc, acc2);
+        //
+        // // check that PEER1 doesn't return anything
+        // if let Ok(_) = ctx.conn.account(PEER1) {
+        //     assert!(true, "PEER1 shouldn't be in the db!")
+        // }
+        //
+        // ctx.conn.delete_account(OUR, None).unwrap();
+    }
+
+    // #[test]
+    // fn test_gen_peer() {
+    //     let ctx = Autocrypt::empty();
+    //
+    //     let policy = StandardPolicy::new();
+    //     ctx.update_private_key(&policy, OUR).unwrap();
+    //     let account = ctx.conn.account(OUR).unwrap();
+    //
+    //     gen_peer(&ctx, &account.mail, PEER1, Mode::Seen, Prefer::Mutual).unwrap();
+    //     gen_peer(&ctx, &account.mail, PEER2, Mode::Seen, Prefer::Mutual).unwrap();
+    //
+    //     let peer1 = ctx.conn.peer(Some(OUR), PEER1.into()).unwrap();
+    //     let peer2 = ctx.conn.peer(Some(OUR), PEER2.into()).unwrap();
+    //
+    //     assert_eq!(peer1.mail, PEER1);
+    //     assert_eq!(peer2.mail, PEER2);
+    //
+    //     assert_ne!(peer1, peer2);
+    // }
+    //
+    // #[test]
+    // fn test_update_peer() {
+    //     let policy = StandardPolicy::new();
+    //
+    //     let ctx = Autocrypt::empty();
+    //     ctx.update_private_key(&policy, OUR).unwrap();
+    //     let account = ctx.conn.account(OUR).unwrap();
+    //
+    //     gen_peer(&ctx, &account.mail, PEER1, Mode::Seen, Prefer::Mutual).unwrap();
+    //
+    //     let now = Utc::now();
+    //
+    //     let peer1 = ctx
+    //         .conn
+    //         .peer(Some(&account.mail), PEER1.into())
+    //         .unwrap();
+    //
+    //     let (cert, _) = gen_cert(PEER1, now.into()).unwrap();
+    //
+    //     ctx.update_peer(
+    //         &account.mail,
+    //         PEER1,
+    //         &cert,
+    //         Prefer::Nopreference,
+    //         Utc::now(),
+    //         true,
+    //     )
+    //     .unwrap();
+    //
+    //     let updated = ctx
+    //         .conn
+    //         .peer(Some(&account.mail), PEER1.into())
+    //         .unwrap();
+    //
+    //     assert_ne!(peer1, updated);
+    //
+    //     ctx.update_peer(
+    //         &account.mail,
+    //         PEER1,
+    //         &cert,
+    //         Prefer::Nopreference,
+    //         Utc::now(),
+    //         false,
+    //     )
+    //     .unwrap();
+    //     let replaced = ctx
+    //         .conn
+    //         .peer(Some(&account.mail), PEER1.into())
+    //         .unwrap();
+    //
+    //     assert_ne!(replaced, updated)
+    // }
+    //
+    // #[test]
+    // fn test_update_old_peer_data() {
+    //     let ctx = Autocrypt::empty();
+    //
+    //     let policy = StandardPolicy::new();
+    //     ctx.update_private_key(&policy, OUR).unwrap();
+    //     let account = ctx.conn.account(OUR).unwrap();
+    //
+    //     gen_peer(&ctx, &account.mail, PEER1, Mode::Seen, Prefer::Mutual).unwrap();
+    //
+    //     let old_peer = ctx
+    //         .conn
+    //         .peer(Some(&account.mail), PEER1.into())
+    //         .unwrap();
+    //
+    //     let past = Utc::now() - Duration::days(150);
+    //     let (cert, _) = gen_cert(PEER1, past.into()).unwrap();
+    //
+    //     ctx.update_peer(
+    //         &account.mail,
+    //         PEER1,
+    //         &cert,
+    //         Prefer::Nopreference,
+    //         past,
+    //         false,
+    //     )
+    //     .unwrap();
+    //
+    //     let same_peer = ctx
+    //         .conn
+    //         .peer(Some(&account.mail), PEER1.into())
+    //         .unwrap();
+    //     assert_eq!(old_peer, same_peer);
+    // }
+    //
+    // #[test]
+    // fn test_update_seen() {
+    //     let ctx = Autocrypt::empty();
+    //
+    //     let policy = StandardPolicy::new();
+    //     ctx.update_private_key(&policy, OUR).unwrap();
+    //     let account = ctx.conn.account(OUR).unwrap();
+    //
+    //     let now = SystemTime::now();
+    //     let (cert, _) = gen_cert(PEER1, now).unwrap();
+    //
+    //     // we do this manually because we want to set an old date
+    //     let now = Utc::now() - Duration::days(1);
+    //     let peer = Peer::new(PEER1, &account.mail, now, &cert, false, Prefer::Mutual);
+    //
+    //     ctx.conn.insert_peer(&peer).unwrap();
+    //
+    //     let before = ctx
+    //         .conn
+    //         .peer(Some(&account.mail), PEER1.into())
+    //         .unwrap();
+    //
+    //     let future = Utc::now();
+    //     ctx.update_last_seen(Some(&account.mail), PEER1, future)
+    //         .unwrap();
+    //
+    //     let peer = ctx
+    //         .conn
+    //         .peer(Some(&account.mail), PEER1.into())
+    //         .unwrap();
+    //     assert_ne!(before.last_seen, peer.last_seen);
+    // }
+    //
+    // #[test]
+    // fn test_update_seen_old() {
+    //     let ctx = Autocrypt::empty();
+    //
+    //     let policy = StandardPolicy::new();
+    //     ctx.update_private_key(&policy, OUR).unwrap();
+    //     let account = ctx.conn.account(OUR).unwrap();
+    //
+    //     gen_peer(&ctx, &account.mail, PEER1, Mode::Seen, Prefer::Mutual).unwrap();
+    //     let peer = ctx
+    //         .conn
+    //         .peer(Some(&account.mail), PEER1.into())
+    //         .unwrap();
+    //
+    //     let history = Utc::now() - Duration::days(150);
+    //
+    //     ctx.update_last_seen(Some(&account.mail), PEER1, history)
+    //         .unwrap();
+    //
+    //     assert_ne!(history, peer.last_seen);
+    // }
+    //
+    // #[test]
+    // fn test_delete_peer() {
+    //     let ctx = Autocrypt::empty();
+    //
+    //     let policy = StandardPolicy::new();
+    //     ctx.update_private_key(&policy, OUR).unwrap();
+    //     let account = ctx.conn.account(OUR).unwrap();
+    //
+    //     gen_peer(&ctx, &account.mail, PEER1, Mode::Seen, Prefer::Mutual).unwrap();
+    //
+    //     ctx.conn.delete_peer(Some(OUR), PEER1).unwrap();
+    // }
+    //
+    // #[test]
+    // fn test_encrypt() {
+    //     let ctx = Autocrypt::empty();
+    //
+    //     let policy = StandardPolicy::new();
+    //     ctx.update_private_key(&policy, OUR).unwrap();
+    //     let account = ctx.conn.account(OUR).unwrap();
+    //
+    //     gen_peer(&ctx, &account.mail, PEER1, Mode::Seen, Prefer::Mutual).unwrap();
+    //
+    //     let input = "This is a small  to test encryption";
+    //     let mut output: Vec<u8> = vec![];
+    //     ctx.encrypt(&policy, OUR, &[PEER1], &mut input.as_bytes(), &mut output)
+    //         .unwrap();
+    // }
+    //
+    // #[test]
+    // fn test_decrypt() {
+    //     let ctx = Autocrypt::empty();
+    //
+    //     let policy = StandardPolicy::new();
+    //
+    //     ctx.update_private_key(&policy, OUR).unwrap();
+    //
+    //     let input = "This is a small  to test encryption";
+    //
+    //     let mut middle: Vec<u8> = vec![];
+    //     ctx.encrypt(&policy, OUR, &[OUR], &mut input.as_bytes(), &mut middle)
+    //         .unwrap();
+    //
+    //     let mut output: Vec<u8> = vec![];
+    //     let mut middle: &[u8] = &middle;
+    //
+    //     ctx.decrypt(&policy, OUR, &mut middle, &mut output, None)
+    //         .unwrap();
+    //
+    //     let decrypted = from_utf8(&output).unwrap();
+    //
+    //     assert_eq!(input, decrypted);
+    // }
+    //
+    // // #[test]
+    // // fn test_verify() {
+    // //     let ctx = Autocrypt::empty();
+    // //     let policy = StandardPolicy::new();
+    // //
+    // //     ctx.update_private_key(&policy, OUR).unwrap();
+    // //     gen_peer(&ctx, OUR, Mode::Seen, true).unwrap();
+    // //
+    // //     let input = "This is a small  to test encryption";
+    // //
+    // //     let mut middle: Vec<u8> = vec![];
+    // //     ctx.encrypt(&policy, OUR, &[PEER1], &mut input.as_bytes(), &mut middle).unwrap();
+    // //
+    // //     let mut output: Vec<u8> = vec![];
+    // //     let mut middle: &[u8] = &middle;
+    // //
+    // //     ctx.decrypt(&policy, OUR, &mut middle, &mut output, None).unwrap();
+    // //
+    // //     let decrypted = from_utf8(&output).unwrap();
+    // //
+    // //     // assert_eq!(input, decrypted);
+    // // }
+    //
+    // #[test]
+    // fn test_recommend_available() {
+    //     let ctx = Autocrypt::empty();
+    //
+    //     let policy = StandardPolicy::new();
+    //     ctx.update_private_key(&policy, OUR).unwrap();
+    //     let account = ctx.conn.account(OUR).unwrap();
+    //
+    //     gen_peer(&ctx, &account.mail, PEER1, Mode::Seen, Prefer::Mutual).unwrap();
+    //     assert_eq!(
+    //         ctx.recommend(Some(OUR), PEER1, &policy, false, Prefer::Mutual),
+    //         UIRecommendation::Encrypt
+    //     );
+    // }
+    //
+    // #[test]
+    // fn test_recommend_disable() {
+    //     let ctx = Autocrypt::empty();
+    //
+    //     let policy = StandardPolicy::new();
+    //     ctx.update_private_key(&policy, OUR).unwrap();
+    //     let account = ctx.conn.account(OUR).unwrap();
+    //
+    //     assert_eq!(
+    //         ctx.recommend(Some(OUR), PEER1, &policy, false, Prefer::Mutual),
+    //         UIRecommendation::Disable
+    //     );
+    //     gen_peer(&ctx, &account.mail, PEER1, Mode::Seen, Prefer::Mutual).unwrap();
+    //
+    //     assert_eq!(
+    //         ctx.recommend(Some(OUR), PEER2, &policy, false, Prefer::Mutual),
+    //         UIRecommendation::Disable
+    //     );
+    // }
+    //
+    // #[test]
+    // fn test_recommond_gossip() {
+    //     let ctx = Autocrypt::empty();
+    //
+    //     let policy = StandardPolicy::new();
+    //     ctx.update_private_key(&policy, OUR).unwrap();
+    //     let account = ctx.conn.account(OUR).unwrap();
+    //
+    //     gen_peer(&ctx, &account.mail, PEER1, Mode::Gossip, Prefer::Mutual).unwrap();
+    //
+    //     assert_eq!(
+    //         ctx.recommend(Some(OUR), PEER1, &policy, false, Prefer::Mutual),
+    //         UIRecommendation::Discourage
+    //     )
+    // }
+}
