@@ -17,12 +17,12 @@ use openpgp::packet::Signature;
 use openpgp::policy::Policy;
 use openpgp::serialize::Serialize;
 use openpgp::types::KeyFlags;
-use rusqlite::Rows;
-use rusqlite::ToSql;
 use rusqlite::types::FromSql;
 use rusqlite::types::FromSqlError;
 use rusqlite::types::ToSqlOutput;
 use rusqlite::types::Value;
+use rusqlite::Rows;
+use rusqlite::ToSql;
 use rusqlite::{params, CachedStatement, Connection, OpenFlags, Row};
 
 use openpgp::{packet::UserID, parse::Parse, Cert, Fingerprint, KeyHandle, KeyID};
@@ -358,8 +358,8 @@ pub enum Error {
     #[error("Cannot delete peer: {0}")]
     CannotDeletePeer(#[source] anyhow::Error, String),
 
-    #[error("Cannot find peer for email: {1}")]
-    CannotFindPeerKey(#[source] anyhow::Error, String),
+    #[error("Cannot find peer for email: {0}")]
+    CannotFindPeerKey(String),
 
     #[error("Cannot find account for email: {1}")]
     CannotFindAccountKey(#[source] anyhow::Error, String),
@@ -555,13 +555,12 @@ impl Autocrypt {
         wrap_err!(
             conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS account (
-                    address TEXT UNIQUE PRIMARY KEY NOT NULL COLLATE EMAIL, 
+                    address TEXT PRIMARY KEY NOT NULL COLLATE EMAIL, 
                     prefer INT,
                     enable INT,
                     primary_key TEXT
-                );"
-                // CREATE INDEX IF NOT EXISTS account_index
-                //     ON account (address COLLATE EMAIL, primary_key)"
+                );" // CREATE INDEX IF NOT EXISTS account_index
+                    //     ON account (address COLLATE EMAIL, primary_key)"
             ),
             InitCannotOpenDB,
             format!("Creating account table ('{}')", keys_db.display())
@@ -577,9 +576,8 @@ impl Autocrypt {
                     FOREIGN KEY (account)
                             REFERENCES account(address)
                         ON DELETE CASCADE
-                 );"
-                 // CREATE INDEX IF NOT EXISTS keys_index
-                 //   ON keys (primary_key, secret)"
+                 );" // CREATE INDEX IF NOT EXISTS keys_index
+                     //   ON keys (primary_key, secret)"
             ),
             InitCannotOpenDB,
             format!("Creating keys table ('{}')", keys_db.display())
@@ -590,13 +588,13 @@ impl Autocrypt {
                 "CREATE TABLE IF NOT EXISTS subkeys (
                    subkey TEXT NOT NULL /* KeyID */,
                    primary_key TEXT NOT NULL /* Fingerprint */,
-                   UNIQUE(subkey, primary_key),
-                   FOREIGN KEY (primary_key)
-                       REFERENCES keys(primary_key)
+                   account TEXT NOT NULL /* Fingerprint */,
+                   PRIMARY KEY(subkey, primary_key, account),
+                   FOREIGN KEY (primary_key, account)
+                       REFERENCES keys(primary_key, account)
                      ON DELETE CASCADE
-                 );"
-                 // CREATE INDEX IF NOT EXISTS subkeys_index
-                 //   ON subkeys (subkey, primary_key)"
+                 );" // CREATE INDEX IF NOT EXISTS subkeys_index
+                     //   ON subkeys (subkey, primary_key)"
             ),
             InitCannotOpenDB,
             format!("Creating subkeys table ('{}')", keys_db.display())
@@ -663,7 +661,7 @@ impl Autocrypt {
         "SELECT tpk, secret FROM subkeys
             LEFT JOIN keys
                 ON subkeys.primary_key == keys.primary_key
-            WHERE subkey == ?"
+            WHERE subkeys.primary_key == ?"
     );
 
     // Returns a prepared statement for finding a certificate with
@@ -675,12 +673,12 @@ impl Autocrypt {
         "SELECT tpk, secret FROM subkeys
             LEFT JOIN keys
                 ON subkeys.primary_key == keys.primary_key
-            WHERE subkey == ? and keys.secret == 1"
+            WHERE subkeys.primary_key == ? and keys.secret == 1"
     );
 
     sql_stmt!(
         tsk_find_with_account_stmt,
-        "SELECT tpk FROM account
+        "SELECT tpk, secret FROM account
             LEFT JOIN keys
                 ON account.primary_key == keys.primary_key
             WHERE account.address = ? and keys.secret == 1"
@@ -722,6 +720,24 @@ impl Autocrypt {
             WHERE address == ?"
     );
 
+    // "CREATE TABLE IF NOT EXISTS peer (
+    //     address TEXT NOT NULL COLLATE EMAIL,
+    //     account text,
+    //     last_seen INT8,
+    //     timestamp INT8,
+    //     primary_key text,
+    //     gossip_timestamp INT8,
+    //     gossip_primary_key text,
+    //     prefer int,
+    //     counting_since int8,
+    //     count_have_ach int8,
+    //     count_no_ach int8,
+    //     bad_user_agent text,
+    //     PRIMARY KEY(address, account),
+    //     FOREIGN KEY(account)
+    //             REFERENCES autocrypt_account(address)
+    //         ON DELETE CASCADE
+    // );
     sql_stmt!(
         get_peer_stmt,
         "SELECT address,
@@ -731,10 +747,12 @@ impl Autocrypt {
             primary_key,
             gossip_timestamp,
             gossip_primary_key,
-            prefer
+            prefer,
+            counting_since int8,
+            count_have_ach int8,
+            count_no_ach int8,
+            bad_user_agent text
         FROM peer
-            LEFT JOIN keys
-                ON peer.gossip_primary_key == keys.primary_key
             WHERE address == ? and account == ?"
     );
 
@@ -763,8 +781,8 @@ impl Autocrypt {
     // Returns a prepared statement for updating the subkeys table.
     sql_stmt!(
         cert_save_insert_subkeys_stmt,
-        "INSERT OR REPLACE INTO subkeys (subkey, primary_key)
-                VALUES (?, ?)"
+        "INSERT OR REPLACE INTO subkeys (subkey, primary_key, account)
+                VALUES (?, ?, ?)"
     );
 
     sql_stmt!(
@@ -860,7 +878,7 @@ impl Autocrypt {
         let fpr: Option<Fingerprint> = get_fpr!(row.get(1));
         let prefer = row.get(2)?;
         let enable = row.get(3)?;
-        Ok(Account{
+        Ok(Account {
             mail,
             fpr,
             prefer,
@@ -868,7 +886,7 @@ impl Autocrypt {
         })
     }
 
-    fn row_to_peer<'a>(rows: &mut Rows) -> Result<Peer> {
+    fn row_to_peer<'a>(rows: &mut Rows, account_email: &str) -> Result<Peer> {
         if let Some(row) = rows.next()? {
             let mail = row.get(0)?;
             let account = row.get(1)?;
@@ -897,7 +915,10 @@ impl Autocrypt {
                 bad_user_agent,
             })
         } else {
-            Err(anyhow::anyhow!("No Peer found"))
+            Err(anyhow::Error::from(Error::CannotFindPeerKey(format!(
+                "No peer for email: {}",
+                account_email
+            ))))
         }
     }
 
@@ -924,8 +945,12 @@ impl Autocrypt {
     }
     fn set_account(&self, acc: &Account) -> Result<()> {
         wrap_err!(
-            Self::account_save_insert_stmt(&self.conn)?.
-                execute(params![acc.mail, acc.prefer, acc.enable, acc.fpr.as_ref().map(|fpr| fpr.to_hex())]),
+            Self::account_save_insert_stmt(&self.conn)?.execute(params![
+                acc.mail,
+                acc.prefer,
+                acc.enable,
+                acc.fpr.as_ref().map(|fpr| fpr.to_hex())
+            ]),
             UnknownDbError,
             "Trying to set account"
         )?;
@@ -938,27 +963,28 @@ impl Autocrypt {
         let mut stmt = Self::get_peer_stmt(&self.conn)?;
 
         let mut rows = wrap_err!(
-            stmt.query([account_email, peer_mail]),
+            stmt.query([peer_mail, account_email]),
             UnknownDbError,
             "executing query"
         )?;
 
-        Self::row_to_peer(&mut rows)
+        Self::row_to_peer(&mut rows, peer_mail)
     }
 
     fn set_peer(&self, peer: &Peer) -> Result<()> {
-        // wrap_err!(
-        //     Self::account_save_insert_stmt(&self.conn)?.execute(params![peer.mail]),
-        //     UnknownDbError,
-        //     "Trying to set account"
-        // )?;
+        // TODO: implement
+        wrap_err!(
+            Self::account_save_insert_stmt(&self.conn)?.execute(params![peer.mail]),
+            UnknownDbError,
+            "Trying to set peer"
+        )?;
         Ok(())
     }
 
     fn private_key(&self, account_email: &str) -> Result<Cert> {
         tracer!(TRACE, "Autocrypt::private_key");
 
-        let mut stmt = Self::get_peer_stmt(&self.conn)?;
+        let mut stmt = Self::tsk_find_with_account_stmt(&self.conn)?;
 
         let mut rows = wrap_err!(
             stmt.query_map([account_email], Self::key_load),
@@ -1016,7 +1042,7 @@ impl Autocrypt {
         wrap_err!(
             Self::cert_save_insert_primary_stmt(&tx)?.execute(params![
                 fpr,
-                account_email, 
+                account_email,
                 secret,
                 output
             ]),
@@ -1030,6 +1056,7 @@ impl Autocrypt {
                 Self::cert_save_insert_subkeys_stmt(&tx)?.execute(params![
                     sub_fpr,
                     fpr,
+                    account_email
                 ]),
                 UnknownDbError,
                 "Trying to set subkeys"
@@ -1262,7 +1289,7 @@ impl Autocrypt {
         builder.generate()
     }
 
-    /// Creates an account or update the private key the account for our mail. 
+    /// Creates an account or update the private key the account for our mail.
     /// If the current key is still usable, no update is done.
     pub fn update_private_key(&mut self, policy: &dyn Policy, account_email: &str) -> Result<()> {
         let now = SystemTime::now();
@@ -1281,7 +1308,7 @@ impl Autocrypt {
         let (cert, _) = self.gen_cert(account_email, now)?;
         account.fpr = Some(cert.fingerprint());
         self.set_account(&account)?;
-        // self.insert_cert(account_email, &cert, true)?;
+        self.insert_cert(account_email, &cert, true)?;
 
         Ok(())
     }
@@ -1306,7 +1333,7 @@ impl Autocrypt {
 
         match peer {
             Err(err) => match err.downcast_ref::<Error>() {
-                Some(Error::CannotFindPeerKey(_, _)) => Ok(false),
+                Some(Error::CannotFindPeerKey(_)) => Ok(false),
                 _ => return Err(err),
             },
             Ok(ref mut peer) => {
@@ -1364,7 +1391,7 @@ impl Autocrypt {
 
         match peer {
             Err(err) => match err.downcast_ref::<Error>() {
-                Some(Error::CannotFindPeerKey(_, _)) => {
+                Some(Error::CannotFindPeerKey(_)) => {
                     let peer = Peer::new(
                         peer_mail,
                         account_email,
@@ -1381,7 +1408,7 @@ impl Autocrypt {
             },
             Ok(mut peer) => {
                 if effective_date <= peer.last_seen {
-                    return Ok(false)
+                    return Ok(false);
                 }
 
                 peer.count_have_ach = peer.count_have_ach + 1;
@@ -1398,12 +1425,10 @@ impl Autocrypt {
                         self.set_peer(&peer)?;
                         let res = self.insert_cert(account_email, &cert, false);
                         match res {
-                            Ok(_) => {
-                                return Ok(true)
-                            }
+                            Ok(_) => return Ok(true),
                             Err(e) => {
                                 // check for StatementChangedRows and mask them
-                                return Err(e)
+                                return Err(e);
                             }
                         }
                     }
@@ -1415,8 +1440,8 @@ impl Autocrypt {
 
                     self.set_peer(&peer)?;
                     self.insert_cert(account_email, &cert, false)?;
-                    return Ok(true)
-                } 
+                    return Ok(true);
+                }
 
                 Ok(false)
             }
@@ -1910,10 +1935,10 @@ mod tests {
 
     use sequoia_openpgp::policy::StandardPolicy;
 
-    use crate::store::Autocrypt;
     use crate::store::autocrypt::Peer;
     use crate::store::autocrypt::Prefer;
     use crate::store::autocrypt::UIRecommendation;
+    use crate::store::Autocrypt;
 
     type Result<T> = sequoia_openpgp::Result<T>;
 
@@ -1934,24 +1959,24 @@ mod tests {
     //     AutocryptStore::new(conn, Some("hunter2"), false).unwrap()
     // }
 
-    // fn gen_cert(canonicalized_mail: &str, now: SystemTime) -> Result<(Cert, Signature)> {
-    //     let mut builder = CertBuilder::new();
-    //     builder = builder.add_userid(canonicalized_mail);
-    //     builder = builder.set_creation_time(now);
-    //
-    //     builder = builder.set_validity_period(None);
-    //
-    //     // builder = builder.set_validity_period(
-    //     //     Some(Duration::new(3 * SECONDS_IN_YEAR, 0))),
-    //
-    //     // which one to use?
-    //     // builder = builder.set_cipher_suite(CipherSuite::RSA4k);
-    //     builder = builder.set_cipher_suite(CipherSuite::Cv25519);
-    //
-    //     builder = builder.add_subkey(KeyFlags::empty().set_transport_encryption(), None, None);
-    //
-    //     builder.generate()
-    // }
+    fn gen_cert(canonicalized_mail: &str, now: SystemTime) -> Result<(Cert, Signature)> {
+        let mut builder = CertBuilder::new();
+        builder = builder.add_userid(canonicalized_mail);
+        builder = builder.set_creation_time(now);
+
+        builder = builder.set_validity_period(None);
+
+        // builder = builder.set_validity_period(
+        //     Some(Duration::new(3 * SECONDS_IN_YEAR, 0))),
+
+        // which one to use?
+        // builder = builder.set_cipher_suite(CipherSuite::RSA4k);
+        builder = builder.set_cipher_suite(CipherSuite::Cv25519);
+
+        builder = builder.add_subkey(KeyFlags::empty().set_transport_encryption(), None, None);
+
+        builder.generate()
+    }
 
     // fn gen_peer(
     //     ctx: &AutocryptStore<SqliteDriver>,
@@ -1986,44 +2011,34 @@ mod tests {
 
         ctx.update_private_key(&policy, OUR).unwrap();
 
-        // let cert = ctx.private_key(OUR).unwrap();
-
-        // ctx.update_private_key(&policy, OUR).unwrap();
-        // let acc = ctx.conn.account(OUR).unwrap();
-        //
-        // // check stuff in acc
-        // ctx.update_private_key(&policy, OUR).unwrap();
-        // let acc2 = ctx.conn.account(OUR).unwrap();
-        //
-        // assert_eq!(acc, acc2);
-        //
-        // // check that PEER1 doesn't return anything
-        // if let Ok(_) = ctx.conn.account(PEER1) {
-        //     assert!(true, "PEER1 shouldn't be in the db!")
-        // }
-        //
-        // ctx.conn.delete_account(OUR, None).unwrap();
+        let _ = ctx.private_key(OUR).unwrap();
     }
 
-    // #[test]
-    // fn test_gen_peer() {
-    //     let ctx = Autocrypt::empty();
-    //
-    //     let policy = StandardPolicy::new();
-    //     ctx.update_private_key(&policy, OUR).unwrap();
-    //     let account = ctx.conn.account(OUR).unwrap();
-    //
-    //     gen_peer(&ctx, &account.mail, PEER1, Mode::Seen, Prefer::Mutual).unwrap();
-    //     gen_peer(&ctx, &account.mail, PEER2, Mode::Seen, Prefer::Mutual).unwrap();
-    //
-    //     let peer1 = ctx.conn.peer(Some(OUR), PEER1.into()).unwrap();
-    //     let peer2 = ctx.conn.peer(Some(OUR), PEER2.into()).unwrap();
-    //
-    //     assert_eq!(peer1.mail, PEER1);
-    //     assert_eq!(peer2.mail, PEER2);
-    //
-    //     assert_ne!(peer1, peer2);
-    // }
+    #[test]
+    fn autocrypt_test_gen_peer() {
+        let mut ctx = Autocrypt::empty().unwrap();
+
+        let policy = StandardPolicy::new();
+        let now = Utc::now();
+
+        ctx.update_private_key(&policy, OUR).unwrap();
+
+        let (cert, _) = gen_cert(PEER1, now.into()).unwrap();
+        ctx.update_peer(OUR, PEER1, &cert, Prefer::Mutual, now, false)
+            .unwrap();
+        ctx.update_peer(OUR, PEER1, &cert, Prefer::Mutual, now, false)
+            .unwrap();
+        // gen_peer(&ctx, &account.mail, PEER1, Mode::Seen, Prefer::Mutual).unwrap();
+        // gen_peer(&ctx, &account.mail, PEER2, Mode::Seen, Prefer::Mutual).unwrap();
+
+        // let peer1 = ctx.conn.peer(Some(OUR), PEER1.into()).unwrap();
+        // let peer2 = ctx.conn.peer(Some(OUR), PEER2.into()).unwrap();
+        //
+        // assert_eq!(peer1.mail, PEER1);
+        // assert_eq!(peer2.mail, PEER2);
+        //
+        // assert_ne!(peer1, peer2);
+    }
     //
     // #[test]
     // fn test_update_peer() {
