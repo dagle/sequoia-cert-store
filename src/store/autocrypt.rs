@@ -155,7 +155,6 @@ impl Prefer {
 
 pub struct Peer {
     pub mail: String,
-    pub account: String,
     pub last_seen: DateTime<Utc>,
     pub timestamp: Option<DateTime<Utc>>,
     pub cert_fpr: Option<Fingerprint>,
@@ -186,7 +185,6 @@ pub struct Peer {
 impl Peer {
     pub fn new(
         mail: &str,
-        account: &str,
         now: DateTime<Utc>,
         key: &Cert,
         gossip: bool,
@@ -195,7 +193,6 @@ impl Peer {
         if !gossip {
             Peer {
                 mail: mail.to_owned(),
-                account: account.to_owned(),
                 last_seen: now,
                 timestamp: Some(now),
                 cert_fpr: Some(key.fingerprint()),
@@ -210,7 +207,6 @@ impl Peer {
         } else {
             Peer {
                 mail: mail.to_owned(),
-                account: account.to_owned(),
                 last_seen: now,
                 timestamp: None,
                 cert_fpr: None,
@@ -579,13 +575,9 @@ impl Autocrypt {
             conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS keys (
                     primary_key TEXT NOT NULL,
-                    account TEXT NOT NULL,
                     secret BOOLEAN NOT NULL,
                     tpk BLOB NOT NULL,
-                    PRIMARY KEY(primary_key, account),
-                    FOREIGN KEY (account)
-                            REFERENCES account(address)
-                        ON DELETE CASCADE
+                    PRIMARY KEY(primary_key)
                  );" // CREATE INDEX IF NOT EXISTS keys_index
                      //   ON keys (primary_key, secret)"
             ),
@@ -598,10 +590,9 @@ impl Autocrypt {
                 "CREATE TABLE IF NOT EXISTS subkeys (
                    subkey TEXT NOT NULL /* KeyID */,
                    primary_key TEXT NOT NULL /* Fingerprint */,
-                   account TEXT NOT NULL /* Fingerprint */,
-                   PRIMARY KEY(subkey, primary_key, account),
-                   FOREIGN KEY (primary_key, account)
-                       REFERENCES keys(primary_key, account)
+                   PRIMARY KEY(subkey, primary_key),
+                   FOREIGN KEY (primary_key)
+                       REFERENCES keys(primary_key)
                      ON DELETE CASCADE
                  );" // CREATE INDEX IF NOT EXISTS subkeys_index
                      //   ON subkeys (subkey, primary_key)"
@@ -614,10 +605,9 @@ impl Autocrypt {
             conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS peer (
                     address TEXT NOT NULL COLLATE EMAIL, 
-                    account text,
                     last_seen INT8, 
                     timestamp INT8,
-                    primary_key text,
+                    primary_key text, /* add foreign key */
                     gossip_timestamp INT8,
                     gossip_primary_key text,
                     prefer int,
@@ -625,10 +615,7 @@ impl Autocrypt {
                     count_have_ach int8,
                     count_no_ach int8,
                     bad_user_agent text,
-                    PRIMARY KEY(address, account),
-                    FOREIGN KEY(account) 
-                            REFERENCES account(address)
-                        ON DELETE CASCADE
+                    PRIMARY KEY(address)
                 ); 
                 CREATE INDEX IF NOT EXISTS peer_index
                   ON peer (address COLLATE EMAIL, primary_key)"
@@ -717,7 +704,6 @@ impl Autocrypt {
     sql_stmt!(
         get_peer_stmt,
         "SELECT address,
-            account,
             last_seen,
             timestamp,
             primary_key,
@@ -729,7 +715,7 @@ impl Autocrypt {
             count_no_ach int8,
             bad_user_agent text
         FROM peer
-            WHERE address == ? and account == ?"
+            WHERE address == ?"
     );
 
     // Returns a prepared statement for returning all the fingerprints
@@ -750,15 +736,15 @@ impl Autocrypt {
     // Returns a prepared statement for updating the keys table.
     sql_stmt!(
         cert_save_insert_primary_stmt,
-        "INSERT OR REPLACE INTO keys (primary_key, account, secret, tpk)
-                VALUES (?, ?, ?, ?)"
+        "INSERT OR REPLACE INTO keys (primary_key, secret, tpk)
+                VALUES (?, ?, ?)"
     );
 
     // Returns a prepared statement for updating the subkeys table.
     sql_stmt!(
         cert_save_insert_subkeys_stmt,
-        "INSERT OR REPLACE INTO subkeys (subkey, primary_key, account)
-                VALUES (?, ?, ?)"
+        "INSERT OR REPLACE INTO subkeys (subkey, primary_key)
+                VALUES (?, ?)"
     );
 
     sql_stmt!(
@@ -779,7 +765,6 @@ impl Autocrypt {
         peer_save_insert_stmt,
         "INSERT OR REPLACE INTO peer (
             address,
-            account,
             last_seen,
             timestamp,
             primary_key,
@@ -790,7 +775,7 @@ impl Autocrypt {
             count_have_ach,
             count_no_ach,
             bad_user_agent)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     );
 
     // Returns a prepared statement for deleting a certificate.
@@ -883,23 +868,21 @@ impl Autocrypt {
         }
     }
 
-    fn row_to_peer<'a>(rows: &mut Rows, account_email: &str) -> Result<Peer> {
+    fn row_to_peer<'a>(rows: &mut Rows, peer_email: &str) -> Result<Peer> {
         if let Some(row) = rows.next()? {
             let mail = row.get(0)?;
-            let account = row.get(1)?;
-            let last_seen = get_time!(row.get(2));
-            let timestamp = get_optional_time!(row.get(3));
-            let cert_fpr = get_fpr!(row.get(4));
-            let gossip_timestamp = get_optional_time!(row.get(5));
-            let gossip_fpr = get_fpr!(row.get(6));
-            let prefer = row.get(7)?;
-            let counting_since = get_time!(row.get(8));
-            let count_have_ach = row.get(9)?;
-            let count_no_ach = row.get(10)?;
-            let bad_user_agent = row.get(11)?;
+            let last_seen = get_time!(row.get(1));
+            let timestamp = get_optional_time!(row.get(2));
+            let cert_fpr = get_fpr!(row.get(3));
+            let gossip_timestamp = get_optional_time!(row.get(4));
+            let gossip_fpr = get_fpr!(row.get(5));
+            let prefer = row.get(6)?;
+            let counting_since = get_time!(row.get(7));
+            let count_have_ach = row.get(8)?;
+            let count_no_ach = row.get(9)?;
+            let bad_user_agent = row.get(10)?;
             Ok(Peer {
                 mail,
-                account,
                 last_seen,
                 timestamp,
                 cert_fpr,
@@ -914,7 +897,7 @@ impl Autocrypt {
         } else {
             Err(anyhow::Error::from(Error::CannotFindPeerKey(format!(
                 "No peer for email: {}",
-                account_email
+                peer_email,
             ))))
         }
     }
@@ -947,13 +930,13 @@ impl Autocrypt {
         Ok(())
     }
 
-    fn peer(&self, account_email: &str, peer_mail: &str) -> Result<Peer> {
+    fn peer(&self, peer_mail: &str) -> Result<Peer> {
         tracer!(TRACE, "Autocrypt::peer");
 
         let mut stmt = Self::get_peer_stmt(&self.conn)?;
 
         let mut rows = wrap_err!(
-            stmt.query([peer_mail, account_email]),
+            stmt.query([peer_mail]),
             UnknownDbError,
             "executing query"
         )?;
@@ -966,7 +949,6 @@ impl Autocrypt {
             Self::peer_save_insert_stmt(&self.conn)?
                 .execute(params![
                     peer.mail,
-                    peer.account,
                     peer.last_seen.timestamp(),
                     peer.timestamp.map(|t| t.timestamp()),
                     peer.cert_fpr.as_ref().map(|f| f.to_hex()),
@@ -1032,7 +1014,7 @@ impl Autocrypt {
     }
 
 
-    fn insert_cert(&mut self, account_email: &str, cert: &Cert, secret: bool) -> Result<()> {
+    fn insert_cert(&mut self, cert: &Cert, secret: bool) -> Result<()> {
         tracer!(TRACE, "Autocrypt::insert_cert");
 
         let tx = self.conn.transaction()?;
@@ -1043,7 +1025,6 @@ impl Autocrypt {
         wrap_err!(
             Self::cert_save_insert_primary_stmt(&tx)?.execute(params![
                 fpr,
-                account_email,
                 secret,
                 output
             ]),
@@ -1057,7 +1038,6 @@ impl Autocrypt {
                 Self::cert_save_insert_subkeys_stmt(&tx)?.execute(params![
                     sub_fpr,
                     fpr,
-                    account_email
                 ]),
                 UnknownDbError,
                 "Trying to set subkeys"
@@ -1309,7 +1289,7 @@ impl Autocrypt {
         let (cert, _) = self.gen_cert(account_email, now)?;
         account.fpr = Some(cert.fingerprint());
         self.set_account(&account)?;
-        self.insert_cert(account_email, &cert, true)?;
+        self.insert_cert(&cert, true)?;
 
         Ok(())
     }
@@ -1321,7 +1301,6 @@ impl Autocrypt {
     /// * `effective_date` - The date we want to update to. This should be the date from the email.
     pub fn update_last_seen(
         &self,
-        account_email: &str,
         peer_mail: &str,
         effective_date: DateTime<Utc>,
         user_agent: &str,
@@ -1332,7 +1311,7 @@ impl Autocrypt {
 
         let effective_date = effective_date.round_subsecs(0);
 
-        let mut peer = self.peer(account_email, peer_mail);
+        let mut peer = self.peer(peer_mail);
 
         match peer {
             Err(err) => match err.downcast_ref::<Error>() {
@@ -1376,7 +1355,6 @@ impl Autocrypt {
     /// * `gossip` - if the peer exchange is gossip or not.
     pub fn update_peer(
         &mut self,
-        account_email: &str,
         peer_mail: &str,
         cert: &Cert,
         prefer: Prefer,
@@ -1384,29 +1362,28 @@ impl Autocrypt {
         gossip: bool,
     ) -> Result<bool> {
         // remove this?
-        if account_email == peer_mail {
-            return Err(anyhow::anyhow!(
-                "Setting a peer for your private key isn't allowed"
-            ));
-        }
+        // if account_email == peer_mail {
+        //     return Err(anyhow::anyhow!(
+        //         "Setting a peer for your private key isn't allowed"
+        //     ));
+        // }
 
         let effective_date = effective_date.round_subsecs(0);
 
-        let peer = self.peer(account_email, peer_mail);
+        let peer = self.peer(peer_mail);
 
         match peer {
             Err(err) => match err.downcast_ref::<Error>() {
                 Some(Error::CannotFindPeerKey(_)) => {
                     let peer = Peer::new(
                         peer_mail,
-                        account_email,
                         effective_date,
                         cert,
                         gossip,
                         prefer,
                     );
                     self.set_peer(&peer)?;
-                    self.insert_cert(account_email, &cert, false)?;
+                    self.insert_cert(&cert, false)?;
                     Ok(true)
                 }
                 _ => return Err(err),
@@ -1426,7 +1403,7 @@ impl Autocrypt {
 
                         peer.cert_fpr = Some(cert.fingerprint());
                         self.set_peer(&peer)?;
-                        self.insert_cert(account_email, &cert, false)?;
+                        self.insert_cert(&cert, false)?;
                         return Ok(true);
                     }
                 } else if peer.gossip_timestamp.is_none()
@@ -1436,7 +1413,7 @@ impl Autocrypt {
                     peer.gossip_fpr = Some(cert.fingerprint());
 
                     self.set_peer(&peer)?;
-                    self.insert_cert(account_email, &cert, false)?;
+                    self.insert_cert(&cert, false)?;
                     return Ok(true);
                 }
 
@@ -1447,14 +1424,13 @@ impl Autocrypt {
 
     pub fn recommend(
         &self,
-        account_email: &str,
         peer_mail: &str,
         policy: &dyn Policy,
         reply_to_encrypted: bool,
         prefer: Prefer,
     ) -> UIRecommendation {
         // TODO: This isn't wild compatible
-        if let Ok(peer) = self.peer(account_email, peer_mail) {
+        if let Ok(peer) = self.peer(peer_mail) {
             let pre = peer.preliminary_recommend(policy);
             if pre.encryptable() && reply_to_encrypted {
                 return UIRecommendation::Encrypt;
@@ -1483,7 +1459,7 @@ impl Autocrypt {
         // TODO: This isn't wild compatible
         peer_mails
             .iter()
-            .map(|m| self.recommend(account_email, m, policy, reply_to_encrypted, prefer))
+            .map(|m| self.recommend(m, policy, reply_to_encrypted, prefer))
             .sum()
     }
 
@@ -1506,11 +1482,10 @@ impl Autocrypt {
     /// * `peer_mail` - peer we want to generate gossip for
     pub fn gossip_header(
         &self,
-        account_email: &str,
         peer_mail: &str,
         policy: &dyn Policy,
     ) -> Result<AutocryptHeader> {
-        let peer = self.peer(account_email, peer_mail)?;
+        let peer = self.peer(peer_mail)?;
 
         let mut header = if let Some(fpr) = peer.cert_fpr {
             let cert = self.peer_key(&fpr)?;
@@ -1558,7 +1533,7 @@ impl Autocrypt {
             Err(_) => Account::new(account_email, Some(cert.fingerprint())),
         };
         self.set_account(&account)?;
-        self.insert_cert(account_email, &cert, true)
+        self.insert_cert(&cert, true)
     }
 
     /// Make a setup message. Setup messages are used to transfer your private key
@@ -1982,9 +1957,9 @@ mod tests {
         ctx.update_private_key(&policy, OUR).unwrap();
 
         let (cert, _) = gen_cert(PEER1, now.into()).unwrap();
-        ctx.update_peer(OUR, PEER1, &cert, Prefer::Mutual, now, false)
+        ctx.update_peer(PEER1, &cert, Prefer::Mutual, now, false)
             .unwrap();
-        ctx.update_peer(OUR, PEER1, &cert, Prefer::Mutual, now, false)
+        ctx.update_peer(PEER1, &cert, Prefer::Mutual, now, false)
             .unwrap();
     }
 
@@ -1997,10 +1972,10 @@ mod tests {
 
         let now = Utc::now();
         let (cert, _) = gen_cert(PEER1, now.into()).unwrap();
-        ctx.update_peer(OUR, PEER1, &cert, Prefer::Mutual, now, false)
+        ctx.update_peer(PEER1, &cert, Prefer::Mutual, now, false)
             .unwrap();
         let later = Utc::now();
-        ctx.update_last_seen(OUR, PEER1, later, "Outlook").unwrap();
+        ctx.update_last_seen(PEER1, later, "Outlook").unwrap();
     }
 
     #[test]
@@ -2012,12 +1987,12 @@ mod tests {
 
         let now = Utc::now();
         let (cert, _) = gen_cert(PEER1, now.into()).unwrap();
-        ctx.update_peer(OUR, PEER1, &cert, Prefer::Mutual, now, false)
+        ctx.update_peer(PEER1, &cert, Prefer::Mutual, now, false)
             .unwrap();
 
         let later = Utc::now();
         let (cert2, _) = gen_cert(PEER2, later.into()).unwrap();
-        ctx.update_peer(OUR, PEER2, &cert2, Prefer::Mutual, later, false)
+        ctx.update_peer(PEER2, &cert2, Prefer::Mutual, later, false)
             .unwrap();
     }
     //
@@ -2064,7 +2039,7 @@ mod tests {
 
         let now = Utc::now();
         let (cert, _) = gen_cert(PEER1, now.into()).unwrap();
-        ctx.update_peer(OUR, PEER1, &cert, Prefer::Mutual, now, false)
+        ctx.update_peer(PEER1, &cert, Prefer::Mutual, now, false)
             .unwrap();
 
         ctx.peer_delete(PEER1).unwrap();
@@ -2080,10 +2055,10 @@ mod tests {
 
         let now = Utc::now();
         let (cert, _) = gen_cert(PEER1, now.into()).unwrap();
-        ctx.update_peer(OUR, PEER1, &cert, Prefer::Mutual, now, false)
+        ctx.update_peer(PEER1, &cert, Prefer::Mutual, now, false)
             .unwrap();
 
-        let res = ctx.recommend(OUR, PEER1, &policy, true, Prefer::Mutual);
+        let res = ctx.recommend(PEER1, &policy, true, Prefer::Mutual);
         assert_eq!(res, UIRecommendation::Encrypt);
     }
 
@@ -2097,12 +2072,12 @@ mod tests {
 
         let now = Utc::now();
         let (cert, _) = gen_cert(PEER1, now.into()).unwrap();
-        ctx.update_peer(OUR, PEER1, &cert, Prefer::Mutual, now, false)
+        ctx.update_peer(PEER1, &cert, Prefer::Mutual, now, false)
             .unwrap();
 
         let later = Utc::now();
         let (cert, _) = gen_cert(PEER2, now.into()).unwrap();
-        ctx.update_peer(OUR, PEER2, &cert, Prefer::Mutual, later, false)
+        ctx.update_peer(PEER2, &cert, Prefer::Mutual, later, false)
             .unwrap();
 
         let res = ctx.multi_recommend(OUR, &[PEER1, PEER2], &policy, true, Prefer::Mutual);
@@ -2130,10 +2105,10 @@ mod tests {
 
         let now = Utc::now();
         let (cert, _) = gen_cert(PEER1, now.into()).unwrap();
-        ctx.update_peer(OUR, PEER1, &cert, Prefer::Mutual, now, false)
+        ctx.update_peer(PEER1, &cert, Prefer::Mutual, now, false)
             .unwrap();
 
-        ctx.gossip_header(OUR, PEER1, &policy).unwrap();
+        ctx.gossip_header(PEER1, &policy).unwrap();
     }
 
     // #[test]
